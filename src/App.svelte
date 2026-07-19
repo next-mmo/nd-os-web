@@ -6,6 +6,8 @@
   type Wallpaper = "aurora" | "midnight" | "sunrise" | "forest";
   type TaskbarAlignment = "center" | "left";
 
+  type SnapSide = "left" | "right";
+  type Rect = { x: number; y: number; width: number; height: number };
   type WindowState = {
     id: AppId;
     title: string;
@@ -16,8 +18,15 @@
     height: number;
     minimized: boolean;
     maximized: boolean;
+    snap: SnapSide | null;
+    restoreRect: Rect | null;
     z: number;
   };
+
+  // Usable desktop area, mirroring the CSS insets on .desktop-space / .windows-layer.
+  const DESKTOP_TOP = 38;
+  const DESKTOP_BOTTOM = 74;
+  const SNAP_MARGIN = 8;
 
   type Settings = {
     theme: Theme;
@@ -84,9 +93,30 @@
     document.documentElement.dataset.theme = settings.theme;
   }
 
+  // Persist open windows so a reload restores the previous desktop.
+  $: if (hydrated) {
+    localStorage.setItem("nd-os-web:windows", JSON.stringify(windows));
+  }
+
+  // Keep window geometry inside the viewport after a resize (so windows that
+  // were saved on a larger screen don't end up off-screen or oversized).
+  function clampWindowsToViewport() {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    windows = windows.map((w) => {
+      if (w.maximized) return w;
+      const width = Math.min(w.width, vw - 24);
+      const height = Math.min(w.height, vh - 120);
+      const x = Math.max(8, Math.min(w.x, vw - width - 8));
+      const y = Math.max(38, Math.min(w.y, vh - height - 8));
+      return { ...w, x, y, width, height };
+    });
+  }
+
   onMount(() => {
     const storedSettings = localStorage.getItem("nd-os-web:settings");
     const storedNotes = localStorage.getItem("nd-os-web:notes");
+    const storedWindows = localStorage.getItem("nd-os-web:windows");
 
     if (storedSettings) {
       try {
@@ -97,6 +127,30 @@
     }
 
     if (storedNotes !== null) notes = storedNotes;
+
+    if (storedWindows) {
+      try {
+        const parsed = JSON.parse(storedWindows) as WindowState[];
+        if (Array.isArray(parsed) && parsed.length) {
+          // Drop anything that doesn't look like a valid window.
+          windows = parsed.filter(
+            (w) =>
+              w &&
+              typeof w.id === "string" &&
+              typeof w.x === "number" &&
+              typeof w.y === "number" &&
+              typeof w.width === "number" &&
+              typeof w.height === "number" &&
+              appCatalog[w.id as AppId],
+          );
+          // Restore z-order so focus stacking keeps working.
+          zCounter = Math.max(10, ...windows.map((w) => w.z ?? 0)) + 1;
+          clampWindowsToViewport();
+        }
+      } catch {
+        windows = [];
+      }
+    }
 
     document.documentElement.dataset.theme = settings.theme;
     hydrated = true;
@@ -120,13 +174,25 @@
       drag = null;
     };
 
+    const handleResize = () => {
+      // Re-snap any snapped windows so they follow the new viewport size.
+      windows = windows.map((w) => {
+        if (!w.snap) return w;
+        const target = snapRect(w.snap);
+        return { ...w, x: target.x, y: target.y, width: target.width, height: target.height };
+      });
+      clampWindowsToViewport();
+    };
+
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
+    window.addEventListener("resize", handleResize);
 
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
+      window.removeEventListener("resize", handleResize);
     };
   });
 
@@ -164,12 +230,15 @@
         id,
         title: catalogEntry.title,
         icon: catalogEntry.icon,
+        // Geometry kept as the restore target for when the user un-maximizes.
         x: Math.min(120 + offset, Math.max(18, window.innerWidth - 700)),
         y: Math.min(86 + offset, Math.max(50, window.innerHeight - 520)),
         width: id === "settings" ? 760 : 680,
         height: id === "settings" ? 500 : 450,
         minimized: false,
-        maximized: false,
+        maximized: true,
+        snap: null,
+        restoreRect: null,
         z: zCounter,
       },
     ];
@@ -196,9 +265,81 @@
     focusWindow(id);
     windows = windows.map((windowState) =>
       windowState.id === id
-        ? { ...windowState, maximized: !windowState.maximized, minimized: false }
+        ? {
+            ...windowState,
+            maximized: !windowState.maximized,
+            minimized: false,
+            // Clear snap state when toggling maximize so they don't fight each other.
+            snap: !windowState.maximized ? null : windowState.snap,
+            restoreRect: !windowState.maximized ? null : windowState.restoreRect,
+          }
         : windowState,
     );
+  }
+
+  // Usable desktop area, in coordinates relative to .windows-layer (which is
+  // already inset 38px from the topbar and 74px from the taskbar by CSS).
+  // So x/y/width/height here are layer-local, not viewport-absolute.
+  function desktopRect(): Rect {
+    const layerW = window.innerWidth;
+    const layerH = Math.max(0, window.innerHeight - DESKTOP_TOP - DESKTOP_BOTTOM);
+    return {
+      x: SNAP_MARGIN,
+      y: SNAP_MARGIN,
+      width: Math.max(0, layerW - SNAP_MARGIN * 2),
+      height: Math.max(0, layerH - SNAP_MARGIN * 2),
+    };
+  }
+
+  function snapRect(side: SnapSide): Rect {
+    const area = desktopRect();
+    return {
+      x: side === "left" ? area.x : area.x + area.width / 2 + SNAP_MARGIN / 2,
+      y: area.y,
+      width: area.width / 2 - SNAP_MARGIN / 2,
+      height: area.height,
+    };
+  }
+
+  function snapWindow(id: AppId, side: SnapSide) {
+    focusWindow(id);
+    windows = windows.map((windowState) => {
+      if (windowState.id !== id) return windowState;
+
+      // Already snapped to this side → restore the pre-snap rectangle.
+      if (windowState.snap === side && windowState.restoreRect) {
+        return {
+          ...windowState,
+          ...windowState.restoreRect,
+          snap: null,
+          restoreRect: null,
+          maximized: false,
+          minimized: false,
+        };
+      }
+
+      // Capture the current geometry once so a second press can restore it.
+      const restore: Rect =
+        windowState.restoreRect ?? {
+          x: windowState.x,
+          y: windowState.y,
+          width: windowState.width,
+          height: windowState.height,
+        };
+
+      const target = snapRect(side);
+      return {
+        ...windowState,
+        x: target.x,
+        y: target.y,
+        width: target.width,
+        height: target.height,
+        snap: side,
+        restoreRect: restore,
+        maximized: false,
+        minimized: false,
+      };
+    });
   }
 
   function toggleTaskbarApp(id: AppId) {
@@ -219,17 +360,54 @@
     );
   }
 
+  // Track titlebar clicks so a double-click toggles maximize, matching Windows.
+  let lastTitleClick: { id: AppId; time: number; x: number; y: number } | null = null;
+  const DOUBLE_CLICK_MS = 350;
+  const DOUBLE_CLICK_JITTER = 5;
+
   function startDrag(event: MouseEvent, windowState: WindowState) {
-    if (windowState.maximized) return;
     if (event.target instanceof Element && event.target.closest("button")) return;
 
     focusWindow(windowState.id);
+
+    // Detect a double-click on the titlebar manually so it works reliably
+    // even though focusWindow + drag state mutate on every mousedown.
+    const now = event.timeStamp;
+    if (
+      lastTitleClick &&
+      lastTitleClick.id === windowState.id &&
+      now - lastTitleClick.time < DOUBLE_CLICK_MS &&
+      Math.abs(event.clientX - lastTitleClick.x) < DOUBLE_CLICK_JITTER &&
+      Math.abs(event.clientY - lastTitleClick.y) < DOUBLE_CLICK_JITTER
+    ) {
+      lastTitleClick = null;
+      toggleMaximize(windowState.id);
+      return;
+    }
+    lastTitleClick = { id: windowState.id, time: now, x: event.clientX, y: event.clientY };
+
+    // Maximized windows don't drag, but the double-click above still toggles them.
+    if (windowState.maximized) return;
+
+    // Dragging a snapped window restores it to a free-floating size.
+    if (windowState.snap && windowState.restoreRect) {
+      const restored = windowState.restoreRect;
+      windows = windows.map((w) =>
+        w.id === windowState.id
+          ? { ...w, ...restored, snap: null, restoreRect: null }
+          : w,
+      );
+    }
+
+    // Use the restored geometry (if any) as the drag origin.
+    const current = windows.find((w) => w.id === windowState.id) ?? windowState;
+
     drag = {
       id: windowState.id,
       startX: event.clientX,
       startY: event.clientY,
-      originX: windowState.x,
-      originY: windowState.y,
+      originX: current.x,
+      originY: current.y,
     };
   }
 
@@ -335,6 +513,7 @@
       {#each visibleWindows as windowState (windowState.id)}
         <article
           class:maximized={windowState.maximized}
+          class:snapped={Boolean(windowState.snap)}
           class:focused={activeWindow === windowState.id}
           class="app-window"
           style={windowState.maximized
@@ -345,7 +524,6 @@
           <header
             class="window-titlebar"
             onmousedown={(event) => startDrag(event, windowState)}
-            ondblclick={() => toggleMaximize(windowState.id)}
           >
             <div class="window-traffic" aria-label="Window controls">
               <button class="traffic close" onclick={() => closeWindow(windowState.id)} aria-label="Close"></button>
@@ -353,7 +531,40 @@
               <button class="traffic maximize" onclick={() => toggleMaximize(windowState.id)} aria-label="Maximize"></button>
             </div>
             <div class="window-title"><span>{windowState.icon}</span><strong>{windowState.title}</strong></div>
-            <div></div>
+            <div class="window-snap-controls" role="group" aria-label="Snap window">
+              <button
+                class="snap-button"
+                class:active={windowState.snap === "left"}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  snapWindow(windowState.id, "left");
+                }}
+                title="Snap left"
+                aria-label="Snap left"
+                aria-pressed={windowState.snap === "left"}
+              >
+                <svg viewBox="0 0 14 12" width="14" height="12" aria-hidden="true">
+                  <rect x="0.5" y="0.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-opacity="0.5" />
+                  <rect x="2" y="2" width="4.5" height="8" rx="1" fill="currentColor" />
+                </svg>
+              </button>
+              <button
+                class="snap-button"
+                class:active={windowState.snap === "right"}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  snapWindow(windowState.id, "right");
+                }}
+                title="Snap right"
+                aria-label="Snap right"
+                aria-pressed={windowState.snap === "right"}
+              >
+                <svg viewBox="0 0 14 12" width="14" height="12" aria-hidden="true">
+                  <rect x="0.5" y="0.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-opacity="0.5" />
+                  <rect x="7.5" y="2" width="4.5" height="8" rx="1" fill="currentColor" />
+                </svg>
+              </button>
+            </div>
           </header>
 
           <div class="window-content">

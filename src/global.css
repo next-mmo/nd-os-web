@@ -282,10 +282,19 @@ textarea:focus-visible {
 }
 
 .app-window.maximized {
-  inset: 8px 8px 0;
+  /* The ancestor .windows-layer already insets for topbar (38px) and taskbar
+     (74px), so here we just need a small edge margin inside it. */
+  inset: 8px;
   width: auto;
   height: auto;
-  border-radius: 16px 16px 0 0;
+  border-radius: 14px;
+}
+
+.app-window.snapped {
+  border-radius: 14px;
+  box-shadow:
+    0 24px 60px rgba(2, 6, 23, 0.55),
+    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .window-titlebar {
@@ -1000,4 +1009,54 @@ h2 { margin-bottom: 14px; font-size: 20px; letter-spacing: -0.025em; }
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Window snap buttons (snap to left / right half) */
+.window-snap-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  opacity: 0.6;
+  transition: opacity 0.18s ease;
+}
+
+.app-window.focused .window-snap-controls,
+.window-snap-controls:hover {
+  opacity: 1;
+}
+
+.snap-button {
+  width: 26px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  line-height: 1;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    transform 0.08s ease;
+}
+
+.snap-button:hover {
+  border-color: color-mix(in srgb, currentColor 38%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.snap-button:active {
+  transform: scale(0.92);
+}
+
+.snap-button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
 }
