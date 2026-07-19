@@ -388,6 +388,13 @@ h2 { margin-bottom: 14px; font-size: 20px; letter-spacing: -0.025em; }
 
 .soft-button:hover { background: var(--panel-hover); }
 
+.soft-button:disabled,
+.danger-button:disabled,
+.workspace-pill:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .file-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
@@ -1059,4 +1066,756 @@ h2 { margin-bottom: 14px; font-size: 20px; letter-spacing: -0.025em; }
   background: var(--accent);
   border-color: var(--accent);
   color: white;
+}
+
+/* Window resize handles — 4 edges + 4 corners. */
+.resize-handle {
+  position: absolute;
+  z-index: 5;
+}
+
+/* Edges: thin strips along each side. */
+.resize-n {
+  top: -4px;
+  left: 8px;
+  right: 8px;
+  height: 8px;
+  cursor: ns-resize;
+}
+.resize-s {
+  bottom: -4px;
+  left: 8px;
+  right: 8px;
+  height: 8px;
+  cursor: ns-resize;
+}
+.resize-w {
+  left: -4px;
+  top: 8px;
+  bottom: 8px;
+  width: 8px;
+  cursor: ew-resize;
+}
+.resize-e {
+  right: -4px;
+  top: 8px;
+  bottom: 8px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+/* Corners: small squares at each corner (on top of the edges). */
+.resize-nw {
+  top: -5px;
+  left: -5px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  z-index: 6;
+}
+.resize-ne {
+  top: -5px;
+  right: -5px;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+  z-index: 6;
+}
+.resize-sw {
+  bottom: -5px;
+  left: -5px;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+  z-index: 6;
+}
+.resize-se {
+  bottom: -5px;
+  right: -5px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  z-index: 6;
+}
+
+/* Spotlight search overlay. */
+.spotlight-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 16vh;
+  background: rgba(2, 6, 23, 0.45);
+  backdrop-filter: blur(6px);
+  animation: menu-in 140ms ease;
+}
+
+.spotlight {
+  width: min(620px, calc(100vw - 32px));
+  background: var(--panel-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  box-shadow: 0 30px 80px rgba(2, 6, 23, 0.55);
+  overflow: hidden;
+  backdrop-filter: blur(28px) saturate(140%);
+}
+
+.spotlight-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.spotlight-icon {
+  font-size: 22px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.spotlight-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.spotlight-input::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.spotlight-kbd {
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.spotlight-results {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.spotlight-result {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.spotlight-result:hover,
+.spotlight-result.selected {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.spotlight-result-icon {
+  font-size: 22px;
+  width: 32px;
+  text-align: center;
+}
+
+.spotlight-result-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.spotlight-result-text strong {
+  font-size: 14px;
+}
+
+.spotlight-result-text small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.spotlight-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Topbar menubar (File/Edit/View/Window/Help). */
+.menubar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.menubar-item {
+  position: relative;
+}
+
+.menubar-trigger {
+  padding: 5px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: default;
+  opacity: 0.85;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+.menubar-trigger.bold {
+  font-weight: 700;
+}
+
+.menubar-trigger:hover,
+.menubar-trigger.open {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  opacity: 1;
+}
+
+.menubar-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  list-style: none;
+  margin: 0;
+  padding: 5px;
+  background: var(--panel-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 20px 50px rgba(2, 6, 23, 0.45);
+  backdrop-filter: blur(24px) saturate(140%);
+  animation: menu-in 120ms ease;
+  z-index: 9500;
+}
+
+.menu-action {
+  width: 100%;
+  display: block;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: default;
+}
+
+.menu-action:hover:not(:disabled) {
+  background: var(--accent);
+  color: white;
+}
+
+.menu-action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--border);
+}
+
+/* Calculator app */
+.calc-app {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  height: 100%;
+}
+
+.calc-display {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px 18px;
+  text-align: right;
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calc-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  flex: 1;
+}
+
+.calc-key {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.08s ease;
+}
+
+.calc-key:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.calc-key:active {
+  transform: scale(0.95);
+}
+
+.calc-key.wide {
+  grid-column: span 2;
+}
+
+.calc-key.soft {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.calc-key.op {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+
+.calc-key.equals {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* Terminal app */
+.term-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: rgba(2, 6, 23, 0.92);
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  padding: 12px 14px;
+  border-radius: 0 0 14px 14px;
+  overflow: hidden;
+}
+
+.term-output {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.term-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.term-line.in {
+  color: #e2e8f0;
+}
+
+.term-line.out {
+  color: #94a3b8;
+}
+
+.term-prompt {
+  color: #5eead4;
+  margin-right: 8px;
+}
+
+.term-input-row {
+  display: flex;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.term-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e2e8f0;
+  font: inherit;
+}
+
+/* Calendar app */
+.cal-app {
+  padding: 18px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+}
+
+.cal-header strong {
+  flex: 1;
+  text-align: center;
+}
+
+.cal-header .soft-button {
+  padding: 4px 10px;
+  font-size: 16px;
+}
+
+.cal-header .soft-button.today {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  flex: 1;
+}
+
+.cal-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 13px;
+  border: 1px solid transparent;
+}
+
+.cal-cell.muted {
+  color: transparent;
+}
+
+.cal-cell.today {
+  background: var(--accent);
+  color: white;
+  font-weight: 700;
+}
+
+/* Topbar workspace status pill. */
+.workspace-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.workspace-pill:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.workspace-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: background 0.14s ease, box-shadow 0.14s ease;
+}
+
+.workspace-pill.native .workspace-pill-dot {
+  background: #28c840;
+  box-shadow: 0 0 6px rgba(40, 200, 64, 0.6);
+}
+
+.workspace-pill.fallback .workspace-pill-dot {
+  background: #febc2e;
+  box-shadow: 0 0 6px rgba(254, 188, 46, 0.5);
+}
+
+.workspace-pill.off .workspace-pill-dot {
+  background: var(--muted);
+}
+
+.workspace-pill.reconnect {
+  border-color: color-mix(in srgb, #febc2e 50%, transparent);
+}
+
+.workspace-pill.reconnect .workspace-pill-dot {
+  background: #febc2e;
+  box-shadow: 0 0 6px rgba(254, 188, 46, 0.6);
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.workspace-pill.connecting {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.workspace-spinner {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: workspace-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.workspace-spinner.button-spinner {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+  margin-right: 6px;
+}
+
+@keyframes workspace-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.workspace-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.workspace-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 460px;
+}
+
+.workspace-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #ef4444 14%, transparent);
+  border: 1px solid color-mix(in srgb, #ef4444 40%, transparent);
+  color: #ef4444;
+  font-size: 12px;
+}
+
+.workspace-actions .soft-button.danger:hover {
+  background: color-mix(in srgb, #ef4444 22%, transparent);
+}
+
+/* Files app */
+.files-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 12px;
+}
+
+.files-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.files-toolbar .soft-button {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.files-toolbar .soft-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.files-toolbar .soft-button.danger:not(:disabled):hover {
+  background: color-mix(in srgb, #ef4444 22%, transparent);
+}
+
+.files-breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  font-size: 13px;
+}
+
+.bc-item {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 3px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.bc-item:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.bc-sep {
+  color: var(--muted);
+  padding: 0 2px;
+}
+
+.files-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: default;
+  font-size: 13px;
+}
+
+.file-row:hover {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.file-row.selected {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.file-row-icon {
+  font-size: 16px;
+}
+
+.file-row-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.files-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 24px;
+}
+
+.files-empty span {
+  font-size: 32px;
+}
+
+.files-empty .danger {
+  color: #ef4444;
+}
+
+/* Text Editor app */
+.editor-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 12px;
+}
+
+.editor-app .app-toolbar h1 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dirty-dot {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.editor-toolbar {
+  display: flex;
+  gap: 6px;
+}
+
+.editor-toolbar .soft-button {
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+.editor-toolbar .soft-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.editor-recent {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.editor-textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  color: var(--text);
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  outline: none;
+}
+
+.editor-textarea:focus {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
 }
