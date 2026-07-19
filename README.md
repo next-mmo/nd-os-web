@@ -1,5 +1,7 @@
 # ND OS Web
 
+[![Build and deploy ND OS Web](https://github.com/next-mmo/nd-os-web/actions/workflows/pages.yml/badge.svg)](https://github.com/next-mmo/nd-os-web/actions/workflows/pages.yml)
+
 A lightweight browser-only desktop starter inspired by ND OS.
 
 This repository intentionally excludes Tauri, Rust, native plugins, shell access, backend service management, terminal features, agents, and LLM integrations.
