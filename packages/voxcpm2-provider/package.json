@@ -1,0 +1,17 @@
+{
+  "name": "@nd-os/voxcpm2-provider",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@nd-os/shared-types": "workspace:*",
+    "@nd-os/tts-core": "workspace:*",
+    "@nd-os/voxcpm2-web-runtime": "workspace:*",
+    "@nd-os/model-storage": "workspace:*"
+  }
+}

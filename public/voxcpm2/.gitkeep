@@ -1,0 +1,6 @@
+# VoxCPM2 WASM artifacts
+# Place Emscripten build output here:
+#   voxcpm2.js
+#   voxcpm2.wasm
+#   voxcpm2.worker.js (if pthread)
+# See packages/voxcpm2-web-runtime/README.md

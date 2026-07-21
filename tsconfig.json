@@ -12,7 +12,19 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
-    "types": ["svelte"]
+    "types": ["svelte", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "$lib": ["src/lib"],
+      "$lib/*": ["src/lib/*"],
+      "@nd-os/shared-types": ["packages/shared-types/src/index.ts"],
+      "@nd-os/tts-core": ["packages/tts-core/src/index.ts"],
+      "@nd-os/audio-engine": ["packages/audio-engine/src/index.ts"],
+      "@nd-os/model-storage": ["packages/model-storage/src/index.ts"],
+      "@nd-os/voxcpm2-web-runtime": ["packages/voxcpm2-web-runtime/src/index.ts"],
+      "@nd-os/voxcpm2-provider": ["packages/voxcpm2-provider/src/index.ts"]
+    }
   },
-  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "vite.config.ts"]
+    "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "packages/**/*.ts", "vite.config.ts", "vitest.config.ts"]
 }

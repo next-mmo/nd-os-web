@@ -15,6 +15,7 @@ This repository intentionally excludes Tauri, Rust, native plugins, shell access
 - Draggable, minimizable, and maximizable windows
 - Basic Files placeholder
 - Notes persisted in `localStorage`
+- **AI TTS Studio** — local-first text-to-speech (VoxCPM2 Browser provider), projects/voices/history in IndexedDB, models in OPFS
 - Settings for theme, wallpaper, accent, taskbar alignment, and clock seconds
 - Responsive mobile layout
 - GitHub Pages preview deployment
@@ -26,12 +27,19 @@ pnpm install
 pnpm dev
 ```
 
-Open `http://localhost:5173`.
+Open `http://localhost:5173`, then launch **AI TTS Studio** from the desktop or Start menu.
+
+### TTS Studio notes
+
+- Generation works offline via the VoxCPM2 runtime package. Until the Emscripten WASM binary is built into `public/voxcpm2/`, the runtime uses an interim local DSP engine and reports **WASM fallback · interim DSP engine** (never labeled as WebGPU).
+- To enable native GGUF inference, see `packages/voxcpm2-web-runtime/README.md`.
+- Model downloads require explicit confirmation (multi‑GB GGUF files).
 
 ## Validation
 
 ```bash
 pnpm check
+pnpm test
 pnpm build
 ```
 
