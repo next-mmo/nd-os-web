@@ -1,13 +1,7 @@
 name: Build CrispASR WebGPU WASM
 
 on:
-  push:
-    branches:
-      - codex/fix-voxcpm2-webgpu-noise
-    paths:
-      - ".github/workflows/build-crispasr-wasm.yml"
-      - "native/crispasr/**"
-      - "scripts/build-crispasr-webgpu.ps1"
+  workflow_dispatch:
 
 permissions:
   contents: read
