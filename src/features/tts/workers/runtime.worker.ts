@@ -56,8 +56,12 @@ function publicAssetUrl(path: string): string {
   return new URL(`../${path}`, self.location.href).href;
 }
 
-const LOADER_PATH = publicAssetUrl("crispasr/libwhisper.js");
-const WASM_PATH = publicAssetUrl("crispasr/libwhisper.wasm");
+// Public runtime assets are not fingerprinted by Vite. Bump this whenever the
+// native build changes so browsers and deployment CDNs cannot reuse an older,
+// numerically incompatible loader/WASM pair.
+const CRISPASR_RUNTIME_VERSION = "2026-07-22-webgpu-safe-1";
+const LOADER_PATH = `${publicAssetUrl("crispasr/libwhisper.js")}?v=${CRISPASR_RUNTIME_VERSION}`;
+const WASM_PATH = `${publicAssetUrl("crispasr/libwhisper.wasm")}?v=${CRISPASR_RUNTIME_VERSION}`;
 
 function crispModuleOptions() {
   return {

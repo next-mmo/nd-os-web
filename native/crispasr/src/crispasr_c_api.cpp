@@ -160,7 +160,10 @@
 #include "miotts.h"
 #define CA_HAVE_MIOTTS 1
 #endif
-#if __has_include("piano_transcription.h")
+// The browser overlay intentionally excludes the piano-transcription target.
+// A header-presence check alone enabled its C API and left unresolved symbols
+// at the final WASM link, so require an explicit build opt-in as well.
+#if defined(CRISPASR_ENABLE_PIANO_TRANSCRIPTION) && __has_include("piano_transcription.h")
 #include "piano_transcription.h"
 #define CA_HAVE_PIANO_TRANSCRIPTION 1
 #endif
