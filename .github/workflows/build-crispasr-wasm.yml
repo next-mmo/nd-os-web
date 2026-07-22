@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout application
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Prepare pinned CrispASR source
         shell: bash
@@ -33,7 +33,7 @@ jobs:
             -v "$RUNNER_TEMP/CrispASR:/src" \
             -w /src \
             emscripten/emsdk:6.0.3 \
-            bash -lc 'emcmake cmake -S . -B build-webgpu -G Ninja \
+            bash -lc 'emcmake cmake -S . -B build-webgpu -G "Unix Makefiles" \
               -DCMAKE_BUILD_TYPE=Release \
               -DGGML_WEBGPU=ON \
               -DGGML_WEBGPU_JSPI=ON \
