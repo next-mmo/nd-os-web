@@ -190,12 +190,13 @@ function main() {
           M.sessionSetTtsSteps?.(msg.timesteps ?? 10);
           M.sessionSetCfgWeight?.(msg.guidance ?? 2.0);
           if (typeof msg.seed === "number") M.sessionSetTtsSeed?.(msg.seed);
-          // Bound the autoregressive loop to the requested text instead of
-          // letting tokenizer byte-counts make short Khmer text run hundreds
-          // of patches. VoxCPM2 may still stop earlier via its stop predictor.
-          const textLength = Array.from(msg.text.trim()).length;
-          const maxArSteps = Math.min(96, Math.max(12, Math.ceil(textLength * 2.5)));
-          M.sessionSetMaxNewTokens?.(maxArSteps);
+
+          // Do not override VoxCPM2's AR generation limit here. The native
+          // runtime derives a safe ceiling from the actual BPE token count
+          // (roughly 6 patches/token + 10, with a 2,000-patch hard limit) and
+          // stops earlier through its learned stop predictor. A character-
+          // based 12-96 patch cap truncates speech, particularly for Khmer.
+          M.sessionSetMaxNewTokens?.(2000);
 
           // Infer language: default to Khmer if text contains Khmer chars, or
           // voice says so, else English.
@@ -217,11 +218,23 @@ function main() {
           // decoder output to 24 kHz mono before returning it. Keep the WAV
           // header and duration aligned with the actual samples.
           const sampleRate = 24000;
-          const durationSec = pcm.length / sampleRate;
 
           // Encode to WAV mono (WAV format expected by client).
           // Copy PCM out of the shared WASM heap before transferring it.
           const samples = new Float32Array(pcm);
+          const signal = analyzePcmSignal(samples);
+          if (signal.nonFiniteSamples > 0) {
+            throw new Error(
+              `Synthesis produced invalid PCM (${signal.nonFiniteSamples} non-finite samples)`,
+            );
+          }
+          if (signal.peak < 1e-4 || signal.rms < 1e-5) {
+            throw new Error(
+              `Synthesis produced silent audio (peak=${signal.peak.toExponential(2)}, rms=${signal.rms.toExponential(2)})`,
+            );
+          }
+
+          const durationSec = samples.length / sampleRate;
           const pcmBytes = samples.buffer;
           const wavBytes = encodeWavMono(samples, sampleRate);
 
@@ -326,6 +339,34 @@ function encodeWavMono(samples: Float32Array, sampleRate: number): ArrayBuffer {
     offset += 2;
   }
   return buffer;
+}
+
+function analyzePcmSignal(samples: Float32Array): {
+  peak: number;
+  rms: number;
+  nonFiniteSamples: number;
+} {
+  let peak = 0;
+  let sumSquares = 0;
+  let finiteSamples = 0;
+  let nonFiniteSamples = 0;
+
+  for (const sample of samples) {
+    if (!Number.isFinite(sample)) {
+      nonFiniteSamples++;
+      continue;
+    }
+    const magnitude = Math.abs(sample);
+    peak = Math.max(peak, magnitude);
+    sumSquares += sample * sample;
+    finiteSamples++;
+  }
+
+  return {
+    peak,
+    rms: finiteSamples > 0 ? Math.sqrt(sumSquares / finiteSamples) : 0,
+    nonFiniteSamples,
+  };
 }
 
 function writeAscii(view: DataView, offset: number, value: string): void {
