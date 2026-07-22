@@ -2,6 +2,13 @@ name: Build CrispASR WebGPU WASM
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/align-voxcpm2-reference
+    paths:
+      - ".github/workflows/build-crispasr-wasm.yml"
+      - "native/crispasr/**"
+      - "scripts/build-crispasr-webgpu.ps1"
 
 permissions:
   contents: read
