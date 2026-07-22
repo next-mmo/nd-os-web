@@ -1551,10 +1551,14 @@ static std::vector<float> tslm_step_graph(voxcpm2_context* ctx, const float* hid
     static const bool env_bucket_cuda = vox_env_bool("CRISPASR_VOXCPM2_BUCKET_CUDA");
     const char* backend_name = ggml_backend_name(ctx->backend);
     const bool is_cuda = (strncmp(backend_name, "CUDA", 4) == 0);
-    // WebGPU uses the reusable bucket graph too. Its prior failure here was
-    // caused by unsupported fused flash-attention; the standard attention
-    // fallback above makes the runtime-indexed KV scatter path viable.
-    const bool no_bucket = env_no_bucket || (is_cuda && !env_bucket_cuda);
+    const bool is_webgpu = (strncmp(backend_name, "WebGPU", 6) == 0);
+    // The reusable bucket graph updates KV state through ggml_set_rows. That
+    // path is already disabled on CUDA because it can corrupt the cache after
+    // the first AR step. The browser WebGPU backend has the same unsafe
+    // in-place scatter/read dependency, which manifests as audible noise even
+    // though synthesis returns finite PCM. Use the dynamic graph's ggml_cpy
+    // KV writes on WebGPU until set_rows is numerically validated there.
+    const bool no_bucket = env_no_bucket || is_webgpu || (is_cuda && !env_bucket_cuda);
     const int needed_lk = pos + 1;
     const int bucket_idx = no_bucket ? -1 : tslm_pick_bucket(needed_lk);
     if (bucket_idx >= 0) {
@@ -4765,7 +4769,13 @@ static std::vector<float> vae_decode_cpu(voxcpm2_context* ctx, const std::vector
 // to avoid the mutual recursion that caused STATUS_STACK_OVERFLOW (#164).
 static std::vector<float> vae_decode(voxcpm2_context* ctx, const std::vector<std::vector<float>>& patches,
                                      ggml_backend_t /*cpu_be*/) {
-    if (vox_env_bool_default_on("CRISPASR_VOXCPM2_USE_GRAPH")) {
+    const char* backend_name = ctx->backend ? ggml_backend_name(ctx->backend) : "";
+    const bool is_webgpu = backend_name && std::strncmp(backend_name, "WebGPU", 6) == 0;
+    // Metal is activation-tested upstream, but the WebGPU convolution and
+    // transposed-convolution path is not. A successful graph can still return
+    // finite broadband noise, so decode WebGPU-produced latents with the
+    // reference CPU VAE until its kernels pass numerical comparison.
+    if (vox_env_bool_default_on("CRISPASR_VOXCPM2_USE_GRAPH") && !is_webgpu) {
         return vae_decode_graph(ctx, patches);
     }
     return vae_decode_cpu(ctx, patches);
@@ -6390,8 +6400,15 @@ static float* vox_synthesize_internal(voxcpm2_context* ctx, const char* text, co
 
     // 2. TSLM prefill from the combined embeds (capture all positions for RALM).
     double t0_prefill = vox_now_ms();
+    const char* synthesis_backend_name = ctx->backend ? ggml_backend_name(ctx->backend) : "";
+    const bool is_webgpu_backend =
+        synthesis_backend_name && std::strncmp(synthesis_backend_name, "WebGPU", 6) == 0;
+    // The batched prefill path was added specifically for the browser overlay,
+    // but unlike the upstream sequential prefill it has no activation-level
+    // validation on WebGPU. Keep the verified CPU prefill for WebGPU while the
+    // autoregressive and diffusion graphs continue to run on the GPU.
     const bool graph_prefill = vox_env_bool_default_on("CRISPASR_VOXCPM2_USE_GRAPH") &&
-                               ctx->backend && ctx->backend != ctx->backend_cpu;
+                               ctx->backend && ctx->backend != ctx->backend_cpu && !is_webgpu_backend;
     std::vector<float> all_pos;
     if (graph_prefill) {
         if (!tslm_prefill_from_embeds_graph(ctx, pi.combined_embed.data(), N_pos, all_pos)) {

@@ -22,6 +22,9 @@ The relevant changes include:
 - WebGPU-native VoxCPM2 TSLM/RALM prefill and inference graph handling.
 - Batched causal prompt prefill and WebGPU-routed projection/FSQ/stop heads.
 - Standard matmul/softmax attention fallback for WebGPU.
+- A conservative WebGPU speech-quality path: verified CPU prefill and AudioVAE
+  decode around GPU autoregressive/diffusion inference, with dynamic KV writes
+  instead of the backend's unvalidated in-place scatter cache.
 - VoxCPM2 runtime controls exposed through the C API and Emscripten bindings.
 - JSPI-aware asynchronous bindings and explicit GPU-backend selection.
 - The exact WebGPU backend and shader sources used by the build.

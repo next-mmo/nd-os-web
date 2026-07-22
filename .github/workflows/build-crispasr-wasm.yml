@@ -1,0 +1,57 @@
+name: Build CrispASR WebGPU WASM
+
+on:
+  push:
+    branches:
+      - codex/fix-voxcpm2-webgpu-noise
+    paths:
+      - ".github/workflows/build-crispasr-wasm.yml"
+      - "native/crispasr/**"
+      - "scripts/build-crispasr-webgpu.ps1"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Prepare pinned CrispASR source
+        shell: bash
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/CrispStrobe/CrispASR.git "$RUNNER_TEMP/CrispASR"
+          git -C "$RUNNER_TEMP/CrispASR" checkout eb780dbaeab676c10959c3b3b096f7547bc8af13
+          cp -a native/crispasr/. "$RUNNER_TEMP/CrispASR/"
+
+      - name: Build with Emscripten 6.0.3
+        shell: bash
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$RUNNER_TEMP/CrispASR:/src" \
+            -w /src \
+            emscripten/emsdk:6.0.3 \
+            bash -lc 'emcmake cmake -S . -B build-webgpu -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DGGML_WEBGPU=ON \
+              -DGGML_WEBGPU_JSPI=ON \
+              -DGGML_OPENMP=OFF \
+              -DCMAKE_DISABLE_FIND_PACKAGE_OpenMP=TRUE && \
+              cmake --build build-webgpu --target libwhisper --parallel 4'
+
+      - name: Collect runtime artifacts
+        shell: bash
+        run: |
+          mkdir -p crispasr-webgpu
+          cp "$RUNNER_TEMP/CrispASR/build-webgpu/bin/libwhisper.js" crispasr-webgpu/
+          cp "$RUNNER_TEMP/CrispASR/build-webgpu/bin/libwhisper.wasm" crispasr-webgpu/
+          sha256sum crispasr-webgpu/*
+
+      - name: Upload runtime artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: crispasr-webgpu
+          path: crispasr-webgpu
+          if-no-files-found: error
