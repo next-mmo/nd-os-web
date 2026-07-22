@@ -15,6 +15,11 @@ const isolationHeaders = {
 export default defineConfig({
   base: "./",
   plugins: [tailwindcss(), svelte()],
+  optimizeDeps: {
+    // ONNX Runtime ships WebAssembly assets that Vite must keep as external
+    // files instead of pre-bundling during dependency optimization.
+    exclude: ["onnxruntime-web"],
+  },
   resolve: {
     alias: {
       "@": path.resolve(root, "src"),

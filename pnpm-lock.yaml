@@ -118,6 +118,9 @@ importers:
       '@nd-os/shared-types':
         specifier: workspace:*
         version: link:../shared-types
+      onnxruntime-web:
+        specifier: ^1.21.0
+        version: 1.27.0
 
 packages:
 

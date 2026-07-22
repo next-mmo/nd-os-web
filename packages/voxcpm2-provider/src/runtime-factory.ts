@@ -22,6 +22,7 @@ import {
   type RuntimeMemoryUsage,
 } from "@nd-os/voxcpm2-web-runtime";
 import type { RuntimeWorkerRequest, RuntimeWorkerResponse } from "../../../src/features/tts/workers/messages";
+import VoxCPM2Worker from "../../../src/features/tts/workers/runtime.worker?worker";
 
 export interface StudioRuntimeOptions {
   /** Override the list of installed model ids (mostly for tests). */
@@ -54,19 +55,9 @@ export async function createStudioRuntime(
     return createVoxCPM2Runtime();
   }
 
-  let WorkerConstructor = options.WorkerClass;
-  if (!WorkerConstructor) {
-    // The literal new-URL form lets Vite compile the TypeScript worker in dev
-    // while the explicit type keeps Emscripten's importScripts() legal.
-    WorkerConstructor = class VoxCPM2Worker extends Worker {
-      constructor() {
-        super(
-          new URL("../../../src/features/tts/workers/runtime.worker.ts", import.meta.url),
-          { name: "voxcpm2-runtime", type: "classic" },
-        );
-      }
-    };
-  }
+  // `?worker` makes Vite transpile TypeScript and emit a classic IIFE worker;
+  // the previous new-URL form was copied verbatim as an unusable `.ts` file.
+  const WorkerConstructor = options.WorkerClass ?? VoxCPM2Worker;
 
   return createWorkerProxyRuntime(resolved.filename, installedGGUF.bytes, WorkerConstructor);
 }

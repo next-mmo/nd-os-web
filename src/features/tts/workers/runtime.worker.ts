@@ -48,8 +48,16 @@ type RuntimeWorkerResponse =
     }
   | { type: "error"; jobId?: string; message: string };
 
-const LOADER_PATH = "/crispasr/libwhisper.js";
-const WASM_PATH = "/crispasr/libwhisper.wasm";
+function publicAssetUrl(path: string): string {
+  if (import.meta.env.DEV) return new URL(`/${path}`, self.location.origin).href;
+  // Production workers are emitted in `<base>/assets/`, while public assets
+  // are copied to `<base>/`. Resolve from the worker URL so sub-path hosting
+  // (including GitHub Pages) does not accidentally request the domain root.
+  return new URL(`../${path}`, self.location.href).href;
+}
+
+const LOADER_PATH = publicAssetUrl("crispasr/libwhisper.js");
+const WASM_PATH = publicAssetUrl("crispasr/libwhisper.wasm");
 
 function crispModuleOptions() {
   return {

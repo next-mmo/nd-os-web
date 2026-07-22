@@ -21,13 +21,13 @@ import type { VoxCPM2GenerateRequest } from "./index";
 // package (tests, interim-only builds) can still load this module. The runtime
 // only invokes the adapter when real ONNX artifacts are present, so a missing
 // import surfaces as a clean "engine unavailable" rather than a boot-time crash.
-type OrtModule = typeof import("onnxruntime-web");
+type OrtModule = typeof import("onnxruntime-web/webgpu");
 
 // Cached dynamic import — paid once per page load.
 let ortPromise: Promise<OrtModule> | null = null;
 async function ort(): Promise<OrtModule> {
   if (!ortPromise) {
-    ortPromise = import("onnxruntime-web").catch((err) => {
+    ortPromise = import("onnxruntime-web/webgpu").catch((err) => {
       ortPromise = null;
       throw new Error(
         "onnxruntime-web is not installed. Run `pnpm add onnxruntime-web` to enable the ONNX engine.",
@@ -328,12 +328,9 @@ async function importOrt(): Promise<OrtModule> {
 }
 
 function configureEnv(ort: OrtModule, threads?: number): void {
-  // Configure WASM backend paths + threads before any session is created.
-  // The `.wasm` / `.mjs` assets must be served alongside the app bundle.
-  if (typeof document !== "undefined") {
-    const base = document.baseURI || "/";
-    ort.env.wasm.wasmPaths = new URL("ort/", base).href;
-  }
+  // Do not override `wasmPaths`: the WebGPU bundle resolves its versioned
+  // Asyncify WASM asset relative to the emitted JS chunk, which keeps hashed
+  // production URLs and sub-path hosting intact.
   if (typeof navigator !== "undefined" && navigator.hardwareConcurrency) {
     ort.env.wasm.numThreads = threads ?? Math.min(4, navigator.hardwareConcurrency);
   }
