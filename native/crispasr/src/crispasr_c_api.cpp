@@ -8295,10 +8295,11 @@ static float* crispasr_session_synthesize_raw_impl(crispasr_session* s, const ch
 #endif
 #ifdef CA_HAVE_VOXCPM2
     if (s->voxcpm2_ctx) {
-        // VoxCPM2 synthesises at 48 kHz mono; every other CrispASR TTS
-        // backend (and the Dart `synthesize` contract) emits 24 kHz.
-        // Decimate 2:1 with a pairwise average — a cheap half-band low
-        // pass — so the host's fixed-24 kHz playback path stays correct.
+        // VoxCPM2's AudioVAE v2 synthesises native 48 kHz mono. Preserve that
+        // waveform for the browser binding instead of applying the old 2:1
+        // pairwise-average decimator. The web provider carries an explicit
+        // sample rate and can play/encode the decoder output without this
+        // lossy round trip.
         // When a 16 kHz reference was set via set_voice, clone that voice;
         // otherwise fall back to the zero-shot default speaker.
         int n48 = 0;
@@ -8311,18 +8312,9 @@ static float* crispasr_session_synthesize_raw_impl(crispasr_session* s, const ch
                 voxcpm2_pcm_free(pcm48);
             return nullptr;
         }
-        const int n24 = n48 / 2;
-        float* pcm24 = (float*)malloc((size_t)(n24 > 0 ? n24 : 1) * sizeof(float));
-        if (!pcm24) {
-            voxcpm2_pcm_free(pcm48);
-            return nullptr;
-        }
-        for (int i = 0; i < n24; ++i)
-            pcm24[i] = 0.5f * (pcm48[2 * i] + pcm48[2 * i + 1]);
-        voxcpm2_pcm_free(pcm48);
         if (out_n_samples)
-            *out_n_samples = n24;
-        return pcm24;
+            *out_n_samples = n48;
+        return pcm48;
     }
 #endif
 #ifdef CA_HAVE_INDEXTTS

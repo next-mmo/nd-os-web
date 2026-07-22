@@ -653,7 +653,8 @@ EMSCRIPTEN_BINDINGS(whisper) {
                              return g_tts_session && crispasr_session_is_voice_design(g_tts_session) != 0;
                          }));
 
-    // Returns a Float32Array of 24 kHz mono PCM. Empty array on failure.
+    // Returns backend-native mono PCM (VoxCPM2 AudioVAE v2 is 48 kHz;
+    // most other TTS backends are 24 kHz). Empty array on failure.
     emscripten::function(
         "ttsSynthesize",
         emscripten::optional_override([](const std::string& text) -> emscripten::val {
@@ -676,7 +677,7 @@ EMSCRIPTEN_BINDINGS(whisper) {
 
 #ifdef __EMSCRIPTEN_PTHREADS__
     // Multithreaded, deadlock-free synth for the browser. Delivers a Float32Array
-    // (24 kHz mono PCM, empty on failure) to `cb`. The servicer only enqueues work
+    // (backend-native mono PCM, empty on failure) to `cb`. The servicer only enqueues work
     // and returns immediately; the blocking compute happens on the proxied pthread.
     emscripten::function(
         "ttsSynthesizeAsync", emscripten::optional_override([](const std::string& text, emscripten::val cb) {

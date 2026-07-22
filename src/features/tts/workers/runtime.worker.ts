@@ -59,9 +59,10 @@ function publicAssetUrl(path: string): string {
 // Public runtime assets are not fingerprinted by Vite. Bump this whenever the
 // native build changes so browsers and deployment CDNs cannot reuse an older,
 // numerically incompatible loader/WASM pair.
-const CRISPASR_RUNTIME_VERSION = "2026-07-22-webgpu-safe-1";
+const CRISPASR_RUNTIME_VERSION = "2026-07-22-webgpu-native48-2";
 const LOADER_PATH = `${publicAssetUrl("crispasr/libwhisper.js")}?v=${CRISPASR_RUNTIME_VERSION}`;
 const WASM_PATH = `${publicAssetUrl("crispasr/libwhisper.wasm")}?v=${CRISPASR_RUNTIME_VERSION}`;
+const VOXCPM2_OUTPUT_SAMPLE_RATE = 48_000;
 
 function crispModuleOptions() {
   return {
@@ -218,10 +219,10 @@ function main() {
 
           if (!pcm || !pcm.length) throw new Error("Synthesis returned empty buffer");
 
-          // The CrispASR session ABI normalizes VoxCPM2's native 48 kHz
-          // decoder output to 24 kHz mono before returning it. Keep the WAV
-          // header and duration aligned with the actual samples.
-          const sampleRate = 24000;
+          // AudioVAE v2 emits native 48 kHz mono. Preserve that rate through
+          // the worker result and WAV header; the browser can resample at its
+          // output boundary when the physical audio device uses another rate.
+          const sampleRate = VOXCPM2_OUTPUT_SAMPLE_RATE;
 
           // Encode to WAV mono (WAV format expected by client).
           // Copy PCM out of the shared WASM heap before transferring it.
