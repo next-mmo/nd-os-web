@@ -39,6 +39,7 @@ jobs:
               -DCMAKE_BUILD_TYPE=Release \
               -DGGML_WEBGPU=ON \
               -DGGML_WEBGPU_JSPI=ON \
+              -DCRISPASR_WASM_SINGLE_FILE=OFF \
               -DGGML_OPENMP=OFF \
               -DCMAKE_DISABLE_FIND_PACKAGE_OpenMP=TRUE && \
               cmake --build build-webgpu --target libwhisper --parallel 4'
