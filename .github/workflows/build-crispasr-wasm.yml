@@ -24,7 +24,7 @@ jobs:
         run: |
           git clone --filter=blob:none --no-checkout https://github.com/CrispStrobe/CrispASR.git "$RUNNER_TEMP/CrispASR"
           git -C "$RUNNER_TEMP/CrispASR" checkout eb780dbaeab676c10959c3b3b096f7547bc8af13
-          git -C "$RUNNER_TEMP/CrispASR" submodule update --init --depth 1 ggml
+          git -C "$RUNNER_TEMP/CrispASR" submodule update --init --depth 1 ggml third_party/c2pa-audio
           cp -a native/crispasr/. "$RUNNER_TEMP/CrispASR/"
 
       - name: Build with Emscripten 6.0.3
