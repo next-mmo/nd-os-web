@@ -111,6 +111,26 @@ class StudioStore {
 
     this.projects = await ttsDb.projects.orderBy("updatedAt").reverse().toArray();
     this.voices = await ttsDb.voices.orderBy("lastUsedAt").reverse().toArray();
+
+    // A page reload terminates the inference worker, so persisted in-flight
+    // jobs cannot still be running. Reconcile them before rendering the queue
+    // instead of leaving permanent "generating" rows after a restart.
+    const interruptedJobs = await ttsDb.jobs
+      .where("status")
+      .anyOf(["queued", "preparing-text", "loading-voice", "generating", "encoding-audio"])
+      .toArray();
+    if (interruptedJobs.length) {
+      const completedAt = Date.now();
+      await ttsDb.jobs.bulkPut(
+        interruptedJobs.map((job) => ({
+          ...job,
+          status: "cancelled" as const,
+          message: "Interrupted by page reload",
+          completedAt,
+          elapsedMs: Math.max(0, completedAt - job.createdAt),
+        })),
+      );
+    }
     this.jobs = await ttsDb.jobs.orderBy("createdAt").reverse().limit(50).toArray();
 
     if (!this.projects.length) {
@@ -131,32 +151,57 @@ class StudioStore {
 
     this.view = "studio";
 
-    // Warm runtime (interim DSP / WASM); detect OPFS GGUF installs.
+    await this.reloadProviderRuntime();
+
+    this.ready = true;
+  }
+
+  /** Rebuild the provider after a model import/download/delete. */
+  async reloadProviderRuntime() {
+    // The provider reports the backend that actually loaded (GGUF WASM or
+    // interim DSP); surface it directly rather than inferring from WebGPU.
     try {
       const provider = providerRegistry.get(this.providerId);
       if (provider) {
         this.runtimeStatus = {
           code: "loading",
-          backend: "wasm",
+          backend: "unavailable",
           label: "Loading model",
         };
+        // Refresh inventory so the factory can select any installed complete
+        // GGUF quantization or fall back to interim DSP.
         const { providerModelManager } = await import("@/features/providers");
-        const modelsReady = await providerModelManager.areRequiredModelsInstalled("voxcpm2");
+        await providerModelManager.refreshInstalled("voxcpm2");
         const installed = providerModelManager.listInstalled();
-        await provider.initialize({
-          modelIds: installed.map((m) => m.path),
+        const initialize = provider.initialize({
+          modelIds: installed.map((m) => m.id),
           preferWebGpu: true,
         });
-        this.runtimeStatus = {
-          code: "ready",
-          backend: "wasm",
-          label: modelsReady
-            ? "Models installed · WASM fallback (interim DSP)"
-            : "WASM fallback · interim DSP engine",
-          detail: modelsReady
-            ? "BaseLM + Acoustic GGUF found in OPFS. Native VoxCPM2 inference needs the WASM runtime build in public/voxcpm2/."
-            : "Ready for local generation. Install GGUF models in Model Manager for native VoxCPM2.",
-        };
+        const poll = globalThis.setInterval(() => {
+          const loadingStatus = provider.getStatus?.();
+          if (loadingStatus) this.runtimeStatus = loadingStatus;
+        }, 250);
+        try {
+          await initialize;
+        } finally {
+          globalThis.clearInterval(poll);
+        }
+        // The runtime knows what actually loaded — ask it, don't guess.
+        // Falls back to a generic "ready" if the provider doesn't expose status.
+        const status = provider.getStatus?.();
+        if (status) {
+          this.runtimeStatus = status;
+        } else {
+          this.runtimeStatus = {
+            code: "ready",
+            backend: "unavailable",
+            label: "Ready",
+            detail:
+              installed.length > 0
+                ? `${installed.length} model(s) installed.`
+                : "Import or download a VoxCPM2 GGUF in Model Manager for neural synthesis.",
+          };
+        }
       }
     } catch (err) {
       this.runtimeStatus = {
@@ -167,7 +212,6 @@ class StudioStore {
       };
     }
 
-    this.ready = true;
   }
 
   async newProject(name = "Untitled Project") {
@@ -351,9 +395,10 @@ class StudioStore {
     this.jobs = [job, ...this.jobs];
     this.activeJobId = jobId;
     this.generating = true;
+    const generationBackend = provider.getStatus?.()?.backend ?? this.runtimeStatus.backend;
     this.runtimeStatus = {
       code: "generating",
-      backend: "wasm",
+      backend: generationBackend,
       label: "Generating",
       progress: 0,
     };
@@ -365,7 +410,7 @@ class StudioStore {
         onProgress: (progress, message) => {
           this.runtimeStatus = {
             code: "generating",
-            backend: "wasm",
+            backend: provider.getStatus?.()?.backend ?? generationBackend,
             label: message,
             progress,
           };
@@ -411,10 +456,7 @@ class StudioStore {
       this.runtimeStatus = {
         code: "ready",
         backend: result.backend,
-        label:
-          result.metadata?.engine === "voxcpm2-wasm"
-            ? "VoxCPM2 ready · WASM"
-            : "WASM fallback · interim DSP engine",
+        label: result.backend === "webgpu" ? "VoxCPM2 ready · WebGPU" : "VoxCPM2 ready",
       };
       await this.saveProject();
     } catch (err) {
@@ -431,8 +473,8 @@ class StudioStore {
       this.errorAction = cancelled ? null : "Retry";
       this.runtimeStatus = {
         code: cancelled ? "ready" : "error",
-        backend: "wasm",
-        label: cancelled ? "WASM fallback · interim DSP engine" : "Generation failed",
+        backend: provider.getStatus?.()?.backend ?? generationBackend,
+        label: cancelled ? "VoxCPM2 ready" : "Generation failed",
         detail: message,
       };
     } finally {

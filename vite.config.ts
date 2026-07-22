@@ -34,7 +34,9 @@ export default defineConfig({
     },
   },
   worker: {
-    format: "es",
+    // CrispASR's Emscripten loader uses importScripts(), which requires a
+    // classic worker. Keep the worker self-contained (no code splitting).
+    format: "iife",
   },
   server: {
     host: true,

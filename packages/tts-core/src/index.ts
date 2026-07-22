@@ -1,4 +1,4 @@
-import type { GenerationMode, TTSResult } from "@nd-os/shared-types";
+import type { GenerationMode, RuntimeStatus, TTSResult } from "@nd-os/shared-types";
 
 export interface TTSProviderMetadata {
   id: string;
@@ -84,6 +84,13 @@ export interface TTSProvider {
   detectCapabilities(): Promise<TTSProviderCapabilities>;
   initialize(config: TTSProviderConfig): Promise<void>;
   unload(): Promise<void>;
+
+  /**
+   * Returns the runtime's actual status after initialize(), reflecting what
+   * really loaded (ONNX WebGPU / ONNX WASM / interim DSP / unavailable).
+   * Distinct from detectCapabilities() which reports theoretical support.
+   */
+  getStatus?(): RuntimeStatus | null;
 
   validateRequest(request: TTSRequest): Promise<TTSValidationResult>;
   estimateGeneration(request: TTSRequest): Promise<TTSGenerationEstimate>;

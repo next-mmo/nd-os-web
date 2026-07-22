@@ -5,6 +5,17 @@ import type {
   RuntimeStatus,
   TTSResult,
 } from "@nd-os/shared-types";
+import type { VoxCPM2EngineAdapter } from "./ort-adapter";
+
+export { createOrtAdapter } from "./ort-adapter";
+export type { VoxCPM2EngineAdapter, OrtAdapterOptions } from "./ort-adapter";
+export { createMockAdapter } from "./mock-adapter";
+export {
+  createCrispASRAdapter,
+  CRISPASR_TTS_SAMPLE_RATE,
+  type CrispASRAdapterOptions,
+  type CrispASRModule,
+} from "./crispasr-adapter";
 
 export interface VoxCPM2InitializeOptions {
   baselmPath?: string;
@@ -48,19 +59,35 @@ export interface VoxCPM2Runtime {
   getMemoryUsage(): RuntimeMemoryUsage;
 }
 
-type EngineKind = "wasm" | "interim-dsp";
+type EngineKind = "onnx" | "interim-dsp";
 
 /**
  * Browser runtime for VoxCPM2.
  *
- * Preferred path: Emscripten-compiled llama.cpp-omni / VoxCPM.cpp WASM
- * loaded from /voxcpm2/ (SIMD + threads when crossOriginIsolated).
+ * Engine tiers, in priority order:
+ *  1. **ONNX Runtime Web** (primary) — loads the BaseLM + Acoustic ONNX models
+ *     from OPFS, runs via WebGPU executor when available, falling back to WASM.
+ *     Selected when an adapter is wired (production binds one to OPFS; tests
+ *     inject a mock).
+ *  2. **Interim DSP** (fallback) — local formant/phoneme synthesizer. Produces
+ *     real non-silent PCM so the studio vertical slice works offline, but is
+ *     clearly labelled as non-neural (`backend: "browser-speech"`).
  *
- * Until the WASM binary is present, an interim local DSP speech engine
- * produces real non-silent PCM so the studio vertical slice works offline.
- * Status never claims WebGPU unless a validated WebGPU path is active.
+ * Status never claims `webgpu` or `wasm` unless a real ONNX session is driving
+ * inference. The interim path reports `browser-speech` honestly.
  */
-export function createVoxCPM2Runtime(): VoxCPM2Runtime {
+export interface CreateRuntimeOptions {
+  /**
+   * Engine adapter to use. Production passes `createOrtAdapter({...})`; tests
+   * pass `createMockAdapter({...})`. When omitted, the runtime runs interim-DSP
+   * only (no OPFS binding is possible without the model filenames).
+   */
+  adapter?: VoxCPM2EngineAdapter;
+}
+
+export function createVoxCPM2Runtime(
+  createOptions: CreateRuntimeOptions = {},
+): VoxCPM2Runtime {
   let status: RuntimeStatus = {
     code: "idle",
     backend: "unavailable",
@@ -69,48 +96,7 @@ export function createVoxCPM2Runtime(): VoxCPM2Runtime {
   let engine: EngineKind | null = null;
   let cancelled = false;
   let sampleRate = 48000;
-  let wasmModule: { synthesize?: (text: string) => Float32Array } | null = null;
-
-  async function detectWebGpu(): Promise<boolean> {
-    try {
-      if (!("gpu" in navigator)) return false;
-      const adapter = await (navigator as Navigator & { gpu: GPU }).gpu.requestAdapter();
-      return Boolean(adapter);
-    } catch {
-      return false;
-    }
-  }
-
-  async function tryLoadWasm(): Promise<boolean> {
-    // Honest load: only succeed when a real module exports synthesize.
-    try {
-      if (typeof fetch !== "function" || typeof document === "undefined") return false;
-      const base = document.baseURI || "/";
-      const scriptUrl = new URL("voxcpm2/voxcpm2.js", base).href;
-      const res = await fetch(scriptUrl);
-      if (!res.ok) return false;
-      const source = await res.text();
-      const blob = new Blob([source], { type: "text/javascript" });
-      const objectUrl = URL.createObjectURL(blob);
-      try {
-        const mod = (await import(/* @vite-ignore */ objectUrl)) as {
-          default?: () => Promise<{ synthesize: (t: string) => Float32Array }>;
-        };
-        if (typeof mod.default === "function") {
-          const instance = await mod.default();
-          if (typeof instance.synthesize === "function") {
-            wasmModule = instance;
-            return true;
-          }
-        }
-      } finally {
-        URL.revokeObjectURL(objectUrl);
-      }
-    } catch {
-      // Expected until Emscripten artifacts are built into public/voxcpm2/
-    }
-    return false;
-  }
+  const adapter = createOptions.adapter ?? null;
 
   return {
     async initialize(options) {
@@ -118,38 +104,53 @@ export function createVoxCPM2Runtime(): VoxCPM2Runtime {
       sampleRate = options.sampleRate ?? 48000;
       status = {
         code: "loading",
-        backend: "wasm",
+        backend: "unavailable",
         label: "Loading model",
         progress: 0.1,
       };
 
-      const hasWasm = await tryLoadWasm();
-      const hasWebGpu = await detectWebGpu();
-
-      if (hasWasm && wasmModule) {
-        engine = "wasm";
-        // WebGPU kernels are not validated yet — report WASM honestly.
-        status = {
-          code: "ready",
-          backend: "wasm",
-          label: hasWebGpu
-            ? "VoxCPM2 ready · WASM (WebGPU not enabled)"
-            : "VoxCPM2 ready · WASM",
-          detail: options.baselmPath
-            ? `Model: ${options.baselmPath}`
-            : "WASM runtime loaded",
-        };
-        return;
+      if (adapter) {
+        try {
+          await adapter.load();
+          engine = "onnx";
+          const backend: RuntimeBackend =
+            adapter.backend === "webgpu" ? "webgpu" : "wasm";
+          status = {
+            code: "ready",
+            backend,
+            label:
+              backend === "webgpu"
+                ? "VoxCPM2 ready · ONNX WebGPU"
+                : "VoxCPM2 ready · ONNX WASM",
+            detail: options.baselmPath
+              ? `Models: ${options.baselmPath}${options.acousticPath ? `, ${options.acousticPath}` : ""}`
+              : "ONNX runtime loaded",
+          };
+          return;
+        } catch (err) {
+          // Adapter failed to load (missing models, unsupported graph, OOM).
+          // Fall through to interim-DSP if allowed, else surface the error.
+          if (options.allowInterimEngine === false) {
+            engine = null;
+            status = {
+              code: "error",
+              backend: "unavailable",
+              label: "ONNX load failed",
+              detail: err instanceof Error ? err.message : String(err),
+            };
+            throw err;
+          }
+        }
       }
 
       if (options.allowInterimEngine !== false) {
         engine = "interim-dsp";
         status = {
           code: "ready",
-          backend: "wasm",
-          label: "WASM fallback · interim DSP engine",
+          backend: "browser-speech",
+          label: "Interim DSP (not neural)",
           detail:
-            "VoxCPM2 WASM binary not found. Using local DSP speech for studio flow. Build packages/voxcpm2-web-runtime to enable native GGUF inference.",
+            "VoxCPM2 ONNX models not installed. Using local DSP placeholder so the studio flow works. Install the BaseLM + Acoustic ONNX models to enable neural synthesis.",
         };
         return;
       }
@@ -158,8 +159,8 @@ export function createVoxCPM2Runtime(): VoxCPM2Runtime {
       status = {
         code: "unsupported",
         backend: "unavailable",
-        label: "Unsupported browser",
-        detail: "VoxCPM2 WASM runtime is not available on this device.",
+        label: "No engine available",
+        detail: "No VoxCPM2 engine is available on this device.",
       };
       throw new Error(status.detail);
     },
@@ -186,9 +187,12 @@ export function createVoxCPM2Runtime(): VoxCPM2Runtime {
       callbacks.onProgress?.(0.05, "Preparing text");
 
       let samples: Float32Array;
-      if (engine === "wasm" && wasmModule?.synthesize) {
-        callbacks.onProgress?.(0.2, "Running VoxCPM2 WASM");
-        samples = wasmModule.synthesize(text);
+      if (engine === "onnx" && adapter) {
+        // Neural path: the FULL request reaches the adapter (seed, mode,
+        // guidance, timesteps, temperature, reference PCM, transcripts). The
+        // adapter marshals these into the ONNX graph inputs.
+        callbacks.onProgress?.(0.2, "Running VoxCPM2 ONNX");
+        samples = await adapter.synthesize({ ...request, text });
       } else {
         callbacks.onProgress?.(0.2, "Running interim DSP engine");
         samples = await synthesizeInterimSpeech(text, sampleRate, {
@@ -217,19 +221,20 @@ export function createVoxCPM2Runtime(): VoxCPM2Runtime {
       }
 
       const wavBytes = encodeWavMono(samples, sampleRate);
-      callbacks.onAudioChunk?.(samples, sampleRate);
-      callbacks.onProgress?.(1, "Completed");
 
-      const backend: RuntimeBackend =
-        engine === "wasm" ? "wasm" : "wasm"; /* interim still reported as WASM fallback */
+      // Backend is reported honestly: ONNX-on-WebGPU → "webgpu",
+      // ONNX-on-WASM → "wasm", interim DSP → "browser-speech".
+      const backend: RuntimeBackend = status.backend;
 
       status = {
         code: "ready",
         backend,
         label:
-          engine === "wasm"
-            ? "VoxCPM2 ready · WASM"
-            : "WASM fallback · interim DSP engine",
+          engine === "onnx"
+            ? backend === "webgpu"
+              ? "VoxCPM2 ready · ONNX WebGPU"
+              : "VoxCPM2 ready · ONNX WASM"
+            : "Interim DSP (not neural)",
       };
 
       return {
@@ -246,7 +251,7 @@ export function createVoxCPM2Runtime(): VoxCPM2Runtime {
         seed: request.seed,
         createdAt: Date.now(),
         metadata: {
-          engine: engine === "wasm" ? "voxcpm2-wasm" : "interim-dsp",
+          engine: engine === "onnx" ? `voxcpm2-onnx-${backend}` : "interim-dsp",
           aiGenerated: true,
         },
       };
@@ -262,7 +267,7 @@ export function createVoxCPM2Runtime(): VoxCPM2Runtime {
     },
 
     async unload() {
-      wasmModule = null;
+      await adapter?.unload();
       engine = null;
       status = {
         code: "idle",
@@ -291,7 +296,7 @@ export function createVoxCPM2Runtime(): VoxCPM2Runtime {
 /**
  * Interim offline speech engine: formant / phoneme DSP.
  * Produces real, non-silent, text-dependent PCM at the requested sample rate.
- * Not VoxCPM2 quality — used only when the WASM runtime is absent.
+ * Not VoxCPM2 quality — used only when the ONNX runtime is absent.
  */
 async function synthesizeInterimSpeech(
   text: string,

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@nd-os/audio-engine": "workspace:*",
-    "@nd-os/shared-types": "workspace:*"
+    "@nd-os/shared-types": "workspace:*",
+    "onnxruntime-web": "^1.21.0"
   }
 }

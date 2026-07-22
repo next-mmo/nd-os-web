@@ -3,15 +3,18 @@ import {
   estimateStorage,
   listOpfsFiles,
   deleteOpfsFile,
+  importBlobToOpfs,
+  validateGgufBlob,
   validateManifest,
   VOXCPM2_MANIFEST,
+  modelFilename,
   type ModelFileRecord,
   type ModelManifest,
 } from "@nd-os/model-storage";
 
 export type DownloadState = {
   modelId: string;
-  status: "idle" | "downloading" | "paused" | "completed" | "error";
+  status: "idle" | "downloading" | "importing" | "paused" | "completed" | "error";
   received: number;
   total?: number;
   error?: string;
@@ -45,7 +48,7 @@ export const providerModelManager = {
     const layout = await ensureStorageLayout();
 
     for (const model of manifest.models) {
-      const filename = `${model.id}.gguf`;
+      const filename = modelFilename(model);
       if (!files.includes(filename)) {
         installed.delete(model.id);
         continue;
@@ -95,6 +98,12 @@ export const providerModelManager = {
 
     const model = manifest.models.find((m) => m.id === modelId);
     if (!model) throw new Error("Model not found in manifest");
+    if (model.availability === "pending") {
+      throw new Error(
+        "This ONNX artifact has not been exported yet. Run scripts/export_voxcpm2_to_onnx.py " +
+          "to produce it, upload it to the manifest's downloadUrl, then set availability: \"available\".",
+      );
+    }
 
     const controller = new AbortController();
     abortControllers.set(modelId, controller);
@@ -108,7 +117,7 @@ export const providerModelManager = {
     try {
       const result = await downloadToOpfs({
         url: model.downloadUrl,
-        filename: `${model.id}.gguf`,
+        filename: modelFilename(model),
         expectedBytes: model.bytes,
         signal: controller.signal,
         onProgress: (received, total) => {
@@ -155,6 +164,81 @@ export const providerModelManager = {
     }
   },
 
+  async importModel(providerId: string, modelId: string, file: File) {
+    const manifest = this.getManifest(providerId);
+    if (!manifest) throw new Error("Unknown provider manifest");
+
+    const model = manifest.models.find((entry) => entry.id === modelId);
+    if (!model) throw new Error("Model not found in manifest");
+    if ((model.format ?? "gguf") !== "gguf") {
+      throw new Error("This model slot only accepts its published non-GGUF artifact.");
+    }
+    if (!file.name.toLowerCase().endsWith(".gguf")) {
+      throw new Error("Choose a .gguf VoxCPM2 model file.");
+    }
+
+    const validation = await validateGgufBlob(file);
+    if (!validation.ok) throw new Error(validation.error);
+
+    const controller = new AbortController();
+    abortControllers.set(modelId, controller);
+    downloads.set(modelId, {
+      modelId,
+      status: "importing",
+      received: 0,
+      total: file.size,
+    });
+
+    try {
+      const result = await importBlobToOpfs({
+        file,
+        filename: modelFilename(model),
+        signal: controller.signal,
+        onProgress: (received, total) => {
+          downloads.set(modelId, {
+            modelId,
+            status: "importing",
+            received,
+            total,
+          });
+        },
+      });
+
+      installed.set(modelId, {
+        id: model.id,
+        providerId,
+        name: model.name,
+        variant: model.variant,
+        quantization: model.quantization,
+        version: model.version,
+        downloadUrl: model.downloadUrl,
+        expectedBytes: model.bytes,
+        installedBytes: result.bytes,
+        checksumOk: true,
+        path: result.path,
+        installedAt: Date.now(),
+      });
+      downloads.set(modelId, {
+        modelId,
+        status: "completed",
+        received: result.bytes,
+        total: file.size,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      downloads.set(modelId, {
+        modelId,
+        status: "error",
+        received: downloads.get(modelId)?.received ?? 0,
+        total: file.size,
+        error: message,
+      });
+      throw err;
+    } finally {
+      abortControllers.delete(modelId);
+    }
+  },
+
   pauseDownload(modelId: string) {
     abortControllers.get(modelId)?.abort();
     const current = downloads.get(modelId);
@@ -164,7 +248,10 @@ export const providerModelManager = {
   },
 
   async deleteModel(modelId: string) {
-    await deleteOpfsFile("models", `${modelId}.gguf`);
+    const manifest = this.getManifest("voxcpm2");
+    const model = manifest?.models.find((m) => m.id === modelId);
+    const filename = model ? modelFilename(model) : `${modelId}.gguf`;
+    await deleteOpfsFile("models", filename);
     installed.delete(modelId);
     downloads.delete(modelId);
   },

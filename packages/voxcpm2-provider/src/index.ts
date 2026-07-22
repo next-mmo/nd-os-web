@@ -10,21 +10,19 @@ import type {
   TTSValidationResult,
 } from "@nd-os/tts-core";
 import { countWords, estimateSpeechDurationSec } from "@nd-os/tts-core";
-import {
-  createVoxCPM2Runtime,
-  type VoxCPM2Runtime,
-} from "@nd-os/voxcpm2-web-runtime";
+import type { VoxCPM2Runtime } from "@nd-os/voxcpm2-web-runtime";
 import type { TTSResult } from "@nd-os/shared-types";
 import { mapRequestToRuntime, VOXCPM2_DEFAULTS } from "./mapper";
 import { validateVoxCPM2Request } from "./validation";
+import { createStudioRuntime } from "./runtime-factory";
 
 export const voxcpm2Metadata: TTSProviderMetadata = {
   id: "voxcpm2",
   name: "VoxCPM2 Browser",
   description:
-    "Local tokenizer-free TTS with voice design and cloning. Runs in your browser via WASM (WebGPU when validated).",
+    "Local tokenizer-free TTS with voice design and cloning. GGUF inference runs through CrispASR on WebGPU.",
   version: "2.0.0",
-  runtime: "hybrid",
+  runtime: "webgpu",
   supportedLanguages: [
     "en",
     "km",
@@ -51,9 +49,14 @@ export const voxcpm2Metadata: TTSProviderMetadata = {
 };
 
 export function createVoxCPM2Provider(): TTSProvider {
-  const runtime: VoxCPM2Runtime = createVoxCPM2Runtime();
+  let runtime: VoxCPM2Runtime | null = null;
   let activeJobId: string | null = null;
   let initialized = false;
+
+  async function getRuntime(): Promise<VoxCPM2Runtime> {
+    if (!runtime) runtime = await createStudioRuntime();
+    return runtime;
+  }
 
   return {
     metadata: voxcpm2Metadata,
@@ -66,9 +69,11 @@ export function createVoxCPM2Provider(): TTSProvider {
         typeof crossOriginIsolated !== "undefined" &&
         crossOriginIsolated;
 
+      const available = webgpu && wasm && threads;
+
       return {
-        available: wasm,
-        backend: wasm ? (webgpu ? "hybrid" : "wasm") : "unavailable",
+        available,
+        backend: available ? "webgpu" : "unavailable",
         webgpu,
         wasm,
         threads,
@@ -79,14 +84,21 @@ export function createVoxCPM2Provider(): TTSProvider {
           "voice-clone",
           "high-fidelity-clone",
         ],
-        reason: wasm
+        reason: available
           ? undefined
-          : "WebAssembly is required for VoxCPM2 Browser",
+          : !webgpu
+            ? "WebGPU is required for VoxCPM2 GGUF inference"
+            : !threads
+              ? "Cross-origin isolation is required for the threaded VoxCPM2 runtime"
+              : "WebAssembly is required for VoxCPM2 Browser",
       };
     },
 
     async initialize(config: TTSProviderConfig) {
-      await runtime.initialize({
+      if (runtime) await runtime.unload();
+      runtime = await createStudioRuntime({ installedModelIds: config.modelIds });
+      const rt = runtime;
+      await rt.initialize({
         baselmPath: config.modelIds[0],
         acousticPath: config.modelIds[1],
         preferWebGpu: config.preferWebGpu,
@@ -96,9 +108,16 @@ export function createVoxCPM2Provider(): TTSProvider {
     },
 
     async unload() {
-      await runtime.unload();
+      if (runtime) await runtime.unload();
       initialized = false;
       activeJobId = null;
+    },
+
+    getStatus() {
+      // Runtime is constructed lazily inside getRuntime(); before initialize()
+      // runs there's no status to report.
+      if (!runtime) return null;
+      return runtime.getStatus();
     },
 
     async validateRequest(request: TTSRequest): Promise<TTSValidationResult> {
@@ -122,14 +141,15 @@ export function createVoxCPM2Provider(): TTSProvider {
     ): Promise<TTSResult> {
       if (!initialized) {
         await this.initialize({
-          modelIds: VOXCPM2_MANIFEST.models.map((m) => m.id),
+          modelIds: [],
           preferWebGpu: true,
         });
       }
       activeJobId = request.jobId;
       const mapped = mapRequestToRuntime(request, VOXCPM2_DEFAULTS);
+      const rt = await getRuntime();
       try {
-        return await runtime.generateStream(mapped, {
+        return await rt.generateStream(mapped, {
           onProgress: callbacks?.onProgress,
         });
       } finally {
@@ -138,7 +158,7 @@ export function createVoxCPM2Provider(): TTSProvider {
     },
 
     async cancel(jobId: string) {
-      if (activeJobId === jobId || activeJobId === null) {
+      if ((activeJobId === jobId || activeJobId === null) && runtime) {
         await runtime.cancel();
       }
     },

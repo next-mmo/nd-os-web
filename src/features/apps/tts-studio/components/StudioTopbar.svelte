@@ -44,7 +44,12 @@
     </div>
   </div>
 
-  <Badge variant="outline" class="max-w-[220px] truncate font-normal">
+  <Badge
+    variant="outline"
+    class="max-w-[220px] truncate font-normal"
+    data-testid="runtime-status"
+    title={studioStore.runtimeStatus.detail ?? studioStore.runtimeStatus.label}
+  >
     {studioStore.runtimeStatus.label}
   </Badge>
 
