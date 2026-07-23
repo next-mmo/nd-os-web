@@ -16,6 +16,7 @@ This repository intentionally excludes Tauri, Rust, native plugins, shell access
 - Basic Files placeholder
 - Notes persisted in `localStorage`
 - **AI TTS Studio** — local-first text-to-speech (VoxCPM2 Browser provider), projects/voices/history in IndexedDB, models in OPFS
+- **Poker** — entertainment Texas Hold'em (solo vs bots, peer-to-peer rooms via PeerJS, local bankroll/stats); see `docs/game-play.md`
 - Settings for theme, wallpaper, accent, taskbar alignment, and clock seconds
 - Responsive mobile layout
 - GitHub Pages preview deployment

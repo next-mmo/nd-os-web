@@ -15,6 +15,11 @@ export const appCatalog: Record<AppId, AppMeta> = {
     icon: "🎙",
     description: "Local-first text-to-speech with VoxCPM2",
   },
+  poker: {
+    title: "Poker",
+    icon: "♠",
+    description: "Texas Hold'em — bots or friends in-browser",
+  },
 };
 
 export const APP_IDS = Object.keys(appCatalog) as AppId[];
@@ -32,6 +37,8 @@ export function defaultWindowSize(id: AppId): { width: number; height: number } 
       return { width: 720, height: 520 };
     case "tts-studio":
       return { width: 1100, height: 720 };
+    case "poker":
+      return { width: 1000, height: 680 };
     default:
       return { width: 680, height: 450 };
   }

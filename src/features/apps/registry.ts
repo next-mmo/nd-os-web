@@ -8,6 +8,7 @@ import FilesApp from "./files/FilesApp.svelte";
 import NotesApp from "./notes/NotesApp.svelte";
 import SettingsApp from "./settings/SettingsApp.svelte";
 import TerminalApp from "./terminal/TerminalApp.svelte";
+import PokerApp from "./poker/PokerApp.svelte";
 import TtsStudioApp from "./tts-studio/TtsStudioApp.svelte";
 
 /** Maps each AppId to its root UI component. Add new apps here. */
@@ -21,4 +22,5 @@ export const appRegistry: Record<AppId, Component> = {
   calendar: CalendarApp,
   editor: EditorApp,
   "tts-studio": TtsStudioApp,
+  poker: PokerApp,
 };

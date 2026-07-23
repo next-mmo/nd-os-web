@@ -7,7 +7,8 @@ export type AppId =
   | "terminal"
   | "calendar"
   | "editor"
-  | "tts-studio";
+  | "tts-studio"
+  | "poker";
 
 export type Theme = "dark" | "light";
 export type Wallpaper = "aurora" | "midnight" | "sunrise" | "forest";

@@ -4,6 +4,7 @@
   import { Toaster } from "$lib/components/ui/sonner/index.js";
   import { workspace } from "@/domains/workspace";
   import { toast } from "@/shared/lib/toast.svelte";
+  import { readAppHash, syncAppHash } from "@/features/desktop/app-hash";
   import { settingsStore } from "@/features/desktop/settings.svelte";
   import { wallpapers } from "@/features/desktop/wallpapers";
   import type { AppId } from "@/features/desktop/types";
@@ -21,6 +22,10 @@
   let contextMenu = $state<{ x: number; y: number } | null>(null);
   let spotlightOpen = $state(false);
   let clock = $state(new Date());
+  /** Avoid rewriting hash while applying an incoming hashchange. */
+  let applyingHash = false;
+  /** Skip sync until hydrate + initial hash open finished. */
+  let hashSyncEnabled = false;
 
   const shellStyle = $derived(
     `--wallpaper:${wallpapers[settingsStore.current.wallpaper]};--accent:${settingsStore.current.accent}`,
@@ -32,6 +37,21 @@
     selectedIcon = id;
     windowManager.open(id);
   }
+
+  function openFromHash() {
+    const id = readAppHash();
+    if (!id) return;
+    applyingHash = true;
+    openApp(id);
+    applyingHash = false;
+  }
+
+  $effect(() => {
+    const active = windowManager.activeWindow;
+    void windowManager.windows;
+    if (!hashSyncEnabled || applyingHash) return;
+    syncAppHash(active);
+  });
 
   function openSpotlight() {
     spotlightOpen = true;
@@ -90,6 +110,12 @@
   onMount(() => {
     settingsStore.hydrate();
     windowManager.hydrate();
+    openFromHash();
+    hashSyncEnabled = true;
+    syncAppHash(windowManager.activeWindow);
+
+    const onHashChange = () => openFromHash();
+    window.addEventListener("hashchange", onHashChange);
 
     const restoreTimeout = window.setTimeout(() => {
       if (workspace.restoring || workspace.status === "connecting") {
@@ -123,6 +149,7 @@
 
     return () => {
       window.clearInterval(timer);
+      window.removeEventListener("hashchange", onHashChange);
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
       window.removeEventListener("resize", handleResize);

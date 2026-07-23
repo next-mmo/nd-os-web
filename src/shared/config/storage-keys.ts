@@ -9,4 +9,8 @@ export const STORAGE_KEYS = {
   workspaceBound: "nd-os-web:workspace-bound",
   /** Free-form desktop icon positions. */
   desktopIcons: "nd-os-web:desktop-icons",
+  /** Poker entertainment profile, bankroll, and local stats. */
+  pokerProfile: "nd-os-web:poker-profile",
+  /** In-progress poker session for reload resume. */
+  pokerSession: "nd-os-web:poker-session",
 } as const;
