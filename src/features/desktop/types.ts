@@ -8,6 +8,7 @@ export type AppId =
   | "calendar"
   | "editor"
   | "tts-studio"
+  | "video-toolkit"
   | "poker";
 
 export type Theme = "dark" | "light";

@@ -22,6 +22,7 @@
       "@nd-os/tts-core": ["packages/tts-core/src/index.ts"],
       "@nd-os/audio-engine": ["packages/audio-engine/src/index.ts"],
       "@nd-os/model-storage": ["packages/model-storage/src/index.ts"],
+      "@nd-os/video-engine": ["packages/video-engine/src/index.ts"],
       "@nd-os/voxcpm2-web-runtime": ["packages/voxcpm2-web-runtime/src/index.ts"],
       "@nd-os/voxcpm2-provider": ["packages/voxcpm2-provider/src/index.ts"]
     }
