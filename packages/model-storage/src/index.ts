@@ -97,12 +97,35 @@ async function getDir(
   return parent.getDirectoryHandle(name, { create: true });
 }
 
+/**
+ * Ask the browser to mark this origin's storage as persistent.
+ *
+ * Without this, OPFS is "best-effort" and the user agent may evict the whole
+ * bucket under storage or memory pressure — silently discarding a multi-GB
+ * model the user waited a long time to download. Requesting persistence is
+ * idempotent and cheap, so it is safe to await on every layout call.
+ */
+let persistRequest: Promise<boolean> | null = null;
+export function ensurePersistentStorage(): Promise<boolean> {
+  persistRequest ??= (async () => {
+    try {
+      if (!navigator.storage?.persist || !navigator.storage.persisted) return false;
+      if (await navigator.storage.persisted()) return true;
+      return await navigator.storage.persist();
+    } catch {
+      return false;
+    }
+  })();
+  return persistRequest;
+}
+
 export async function ensureStorageLayout(): Promise<{
   models: FileSystemDirectoryHandle;
   audio: FileSystemDirectoryHandle;
   refs: FileSystemDirectoryHandle;
   tmp: FileSystemDirectoryHandle;
 }> {
+  void ensurePersistentStorage();
   const root = await getRoot();
   return {
     models: await getDir(root, "models"),
@@ -331,26 +354,48 @@ export async function downloadToOpfs(options: {
   }
   await writable.close();
 
-  // Promote .part → final without materialising a multi-GB model in the JS heap.
-  const partFile = await (await layout.models.getFileHandle(partName)).getFile();
-  const finalHandle = await layout.models.getFileHandle(options.filename, { create: true });
-  const finalWritable = await finalHandle.createWritable();
-  const partReader = partFile.stream().getReader();
+  // Promote .part → final. Prefer `move()`: it is atomic, instant, and copies
+  // no bytes. The previous stream-copy opened the destination with
+  // `createWritable()` (no `keepExistingData`), which truncates the target
+  // *before* the copy begins — so any interruption mid-promote destroyed an
+  // already-installed model and stranded its bytes in the quota with no file
+  // left to delete.
+  const partHandle = await layout.models.getFileHandle(partName);
+  const movable = partHandle as FileSystemFileHandle & {
+    move?: (dir: FileSystemDirectoryHandle, name: string) => Promise<void>;
+  };
+  if (typeof movable.move === "function") {
+    await movable.move(layout.models, options.filename);
+    return { path: `models/${options.filename}`, bytes: received };
+  }
+
+  // Fallback for engines without `move()`: stream into a second temp file and
+  // only replace the original once the copy has closed successfully.
+  const stagedName = `${options.filename}.staged`;
+  const stagedHandle = await layout.models.getFileHandle(stagedName, { create: true });
+  const stagedWritable = await stagedHandle.createWritable();
+  const partReader = (await partHandle.getFile()).stream().getReader();
   try {
     while (true) {
       const { done, value } = await partReader.read();
       if (done) break;
-      await finalWritable.write(value);
+      await stagedWritable.write(value);
     }
-    await finalWritable.close();
+    await stagedWritable.close();
   } catch (error) {
     await partReader.cancel().catch(() => undefined);
-    await finalWritable.abort().catch(() => undefined);
+    await stagedWritable.abort().catch(() => undefined);
+    await layout.models.removeEntry(stagedName).catch(() => undefined);
     throw error;
   } finally {
     partReader.releaseLock();
   }
-  await layout.models.removeEntry(partName);
+  await layout.models.removeEntry(options.filename).catch(() => undefined);
+  const staged = stagedHandle as FileSystemFileHandle & {
+    move?: (name: string) => Promise<void>;
+  };
+  if (typeof staged.move === "function") await staged.move(options.filename);
+  await layout.models.removeEntry(partName).catch(() => undefined);
 
   return { path: `models/${options.filename}`, bytes: received };
 }

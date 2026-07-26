@@ -63,7 +63,7 @@ class StudioStore {
   runtimeStatus = $state<RuntimeStatus>({
     code: "idle",
     backend: "unavailable",
-    label: "VoxCPM2 idle",
+    label: "No provider available",
   });
   compatibility = $state<CompatibilityReport | null>(null);
   showCompatGate = $state(false);
@@ -156,8 +156,15 @@ class StudioStore {
     this.ready = true;
   }
 
+  #reloadingProvider = false;
+
   /** Rebuild the provider after a model import/download/delete. */
   async reloadProviderRuntime() {
+    // Concurrent calls are destructive, not just wasteful: provider
+    // .initialize() begins by unloading the existing runtime, so a second
+    // caller tears down the first one's worker mid-model-load.
+    if (this.#reloadingProvider) return;
+    this.#reloadingProvider = true;
     // The provider reports the backend that actually loaded (GGUF WASM or
     // interim DSP); surface it directly rather than inferring from WebGPU.
     try {
@@ -210,8 +217,9 @@ class StudioStore {
         label: "Runtime error",
         detail: err instanceof Error ? err.message : String(err),
       };
+    } finally {
+      this.#reloadingProvider = false;
     }
-
   }
 
   async newProject(name = "Untitled Project") {
@@ -456,7 +464,17 @@ class StudioStore {
       this.runtimeStatus = {
         code: "ready",
         backend: result.backend,
-        label: result.backend === "webgpu" ? "VoxCPM2 ready · WebGPU" : "VoxCPM2 ready",
+        // Report the backend that actually produced the audio. Collapsing
+        // everything non-WebGPU to "VoxCPM2 ready" hid the interim-DSP
+        // placeholder behind a label that claimed neural synthesis.
+        label:
+          result.backend === "webgpu"
+            ? "VoxCPM2 ready · WebGPU"
+            : result.backend === "wasm"
+              ? "VoxCPM2 ready · WASM"
+              : result.backend === "browser-speech"
+                ? "Interim DSP (not neural)"
+                : "VoxCPM2 ready",
       };
       await this.saveProject();
     } catch (err) {

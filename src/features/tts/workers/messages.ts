@@ -28,6 +28,11 @@ export type RuntimeWorkerRequest =
 
 export type RuntimeWorkerResponse =
   | { type: "status"; label: string; progress?: number; backend?: "webgpu" | "wasm" }
+  // Explicit readiness signal. The proxy used to infer readiness from a
+  // "ready" substring in status labels, which native ggml log lines like
+  // "ggml buffer ready" tripped mid-load — resolving init before the model
+  // was open and swallowing the real error when it arrived.
+  | { type: "ready"; label: string; backend?: "webgpu" | "wasm" }
   | {
       type: "result";
       jobId: string;

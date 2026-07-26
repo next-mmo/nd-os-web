@@ -9,9 +9,16 @@ class MockWorker extends EventTarget implements Worker {
     // Simulate worker-side message handling
     setTimeout(() => {
       if (request.type === "init") {
+        // Mirrors the real worker: a load-time status line first (which must
+        // NOT resolve init), then the explicit ready message.
         this.dispatchEvent(
           new MessageEvent("message", {
-            data: { type: "status", label: "Model ready", backend: "webgpu" },
+            data: { type: "status", label: "ggml buffer ready" },
+          }),
+        );
+        this.dispatchEvent(
+          new MessageEvent("message", {
+            data: { type: "ready", label: "Model ready", backend: "webgpu" },
           }),
         );
       } else if (request.type === "generate") {

@@ -38,6 +38,7 @@ type RuntimeWorkerRequest =
 
 type RuntimeWorkerResponse =
   | { type: "status"; label: string; progress?: number; backend?: "webgpu" | "wasm" }
+  | { type: "ready"; label: string; backend?: "webgpu" | "wasm" }
   | {
       type: "result";
       jobId: string;
@@ -60,8 +61,20 @@ function publicAssetUrl(path: string): string {
 // native build changes so browsers and deployment CDNs cannot reuse an older,
 // numerically incompatible loader/WASM pair.
 const CRISPASR_RUNTIME_VERSION = "2026-07-22-webgpu-native48-2";
-const LOADER_PATH = `${publicAssetUrl("crispasr/libwhisper.js")}?v=${CRISPASR_RUNTIME_VERSION}`;
-const WASM_PATH = `${publicAssetUrl("crispasr/libwhisper.wasm")}?v=${CRISPASR_RUNTIME_VERSION}`;
+
+/**
+ * Asset URLs. The classic-blob bootstrap (runtime-factory) bakes absolute
+ * URLs into `self.__CRISPASR_ASSETS` before importing this module — required
+ * because a `blob:` worker cannot resolve public assets against its own
+ * location. The fallback covers direct `?worker` construction (tests).
+ */
+const bakedAssets = (self as any).__CRISPASR_ASSETS as
+  | { loader: string; wasm: string }
+  | undefined;
+const LOADER_PATH =
+  bakedAssets?.loader ?? `${publicAssetUrl("crispasr/libwhisper.js")}?v=${CRISPASR_RUNTIME_VERSION}`;
+const WASM_PATH =
+  bakedAssets?.wasm ?? `${publicAssetUrl("crispasr/libwhisper.wasm")}?v=${CRISPASR_RUNTIME_VERSION}`;
 const VOXCPM2_OUTPUT_SAMPLE_RATE = 48_000;
 
 function crispModuleOptions() {
@@ -70,23 +83,63 @@ function crispModuleOptions() {
   };
 }
 
-// Multi-threaded Emscripten launches helper threads that run this script
-// with name 'em-pthread'. They must bootstrap the loader and exit early.
+/**
+ * Load the Emscripten loader, which is a *classic* script that assigns
+ * `whisper_factory` onto the global scope.
+ *
+ * `worker.format: "iife"` in vite.config.ts only applies to `vite build`; the
+ * dev server always serves `?worker` imports as ES module workers, where
+ * `importScripts` does not exist. Fetch-and-evaluate is the equivalent for
+ * that context, so the same worker source runs in both dev and production.
+ */
+async function loadLoaderScript(url: string): Promise<void> {
+  // Module workers still expose `importScripts`; it throws only when called,
+  // so this has to be a try/catch rather than a capability check.
+  if (typeof (self as any).importScripts === "function") {
+    try {
+      (self as any).importScripts(url);
+      return;
+    } catch {
+      // Fall through to fetch-and-evaluate.
+    }
+  }
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch CrispASR loader (${response.status}) from ${url}`);
+  }
+  // Indirect eval evaluates in global scope, matching importScripts semantics
+  // so the loader's `whisper_factory` lands on `self`.
+  (0, eval)(await response.text());
+}
+
+// Messages can arrive before the async bootstrap installs the real handler.
+// Buffer them so an `init` posted immediately after construction is not lost.
+// The blob wrapper (runtime-factory) starts this buffer even earlier — while
+// this module was still being fetched — so adopt its array if present.
+const pendingMessages: MessageEvent<RuntimeWorkerRequest>[] =
+  (self as any).__CRISPASR_PENDING ?? [];
+self.onmessage = (event: MessageEvent<RuntimeWorkerRequest>) => {
+  pendingMessages.push(event);
+};
+
+// Multi-threaded Emscripten launches helper threads from this worker's own
+// URL with name 'em-pthread' (the loader spawns `new Worker(_scriptName,
+// {name:"em-pthread"})`; `mainScriptUrlOrBlob` is compiled out of this
+// build). They only need the loader script executed: its UMD tail ends with
+// `isPthread && whisper_factory()`, so the factory self-boots — calling it
+// again here would double-instantiate the module.
 if (self.name === "em-pthread") {
-  // @ts-ignore
-  importScripts(LOADER_PATH);
-  // The modularized Emscripten loader must be invoked so it installs its
-  // pthread message handler in this helper worker.
-  // @ts-ignore
-  void (self as any).whisper_factory(crispModuleOptions());
+  void loadLoaderScript(LOADER_PATH);
 } else {
-  main();
+  void loadLoaderScript(LOADER_PATH).then(main, (err) => {
+    self.postMessage({
+      type: "error",
+      message: `Failed to load CrispASR loader script from ${LOADER_PATH}: ${String(err)}`,
+    } as RuntimeWorkerResponse);
+  });
 }
 
 function main() {
-  // @ts-ignore
-  importScripts(LOADER_PATH);
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const factory = (self as any).whisper_factory;
   if (typeof factory !== "function") {
@@ -101,6 +154,15 @@ function main() {
   let webgpuBackendConfirmed = false;
   const recentRuntimeLogs: string[] = [];
 
+  // Per-patch progress state, fed by parsing native stderr during synthesis.
+  // The session opens at verbosity 2, where the AR loop prints
+  // `voxcpm2: step N stop=…` for every generated patch — the only real
+  // per-patch signal the binary exposes (asrGetProgress() is ASR-only and
+  // stays at −1 for the whole TTS path).
+  let synthesizing = false;
+  let synthStartedAt = 0;
+  let estMaxPatches = 0;
+
   const post = (msg: RuntimeWorkerResponse, transfer?: Transferable[]) => {
     self.postMessage(msg, transfer ?? []);
   };
@@ -113,13 +175,33 @@ function main() {
     if (/using preferred GPU backend:\s*WebGPU/i.test(message)) {
       webgpuBackendConfirmed = true;
     }
-    // During synthesis, carry native stage logs through the existing progress
-    // callback so the UI exposes the real WebGPU stage instead of appearing
-    // frozen at a generic 10% label.
+
+    if (synthesizing) {
+      // The native AR ceiling is roughly 6 patches per prefill position + 10
+      // (capped at 2000); the learned stop predictor usually fires far
+      // earlier, so treat the ceiling as an upper bound, not a target.
+      const tokenized = message.match(/tokenized .* -> (\d+) positions/);
+      if (tokenized) estMaxPatches = Math.min(2000, Number(tokenized[1]) * 6 + 10);
+
+      const step = message.match(/voxcpm2: step (\d+) /);
+      if (step && estMaxPatches > 0) {
+        const n = Number(step[1]);
+        const elapsed = Math.round((Date.now() - synthStartedAt) / 1000);
+        post({
+          type: "status",
+          label: `Synthesizing patch ${n + 1} (≤${estMaxPatches}) · ${elapsed}s`,
+          progress: 0.1 + 0.85 * Math.min(1, (n + 1) / estMaxPatches),
+          backend: webgpuBackendConfirmed ? "webgpu" : undefined,
+        });
+        return;
+      }
+    }
+
+    // Carry other native stage logs through as labels only. (The previous
+    // hardcoded `progress: 0.1` made every log line reset the bar to 10%.)
     post({
       type: "status",
       label: message,
-      progress: opened ? 0.1 : undefined,
       backend: webgpuBackendConfirmed ? "webgpu" : undefined,
     });
   };
@@ -137,7 +219,7 @@ function main() {
       sendError("Failed to instantiate CrispASR WASM module: " + String(err));
     });
 
-  self.onmessage = async (event: MessageEvent<RuntimeWorkerRequest>) => {
+  const handleMessage = async (event: MessageEvent<RuntimeWorkerRequest>) => {
     const msg = event.data;
     try {
       await moduleReady;
@@ -145,7 +227,7 @@ function main() {
       switch (msg.type) {
         case "init": {
           if (opened && activeModelId === msg.baselmPath) {
-            post({ type: "status", label: "Model already loaded" });
+            post({ type: "ready", label: "VoxCPM2 ready · model already loaded", backend: "webgpu" });
             return;
           }
 
@@ -171,19 +253,35 @@ function main() {
           webgpuBackendConfirmed = false;
           M.setGpuBackend("WebGPU");
           post({ type: "status", label: "Opening VoxCPM2-TTS on WebGPU..." });
+          // Leave two cores for the browser/UI; ggml's CPU-side helpers are
+          // the dominant cost when WebGPU offload is partial. (The previous
+          // hardcoded 4 ignored the machine entirely.)
+          const nThreads = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 2));
+          // Verbosity 2 is what makes the AR loop print the per-step lines
+          // that reportRuntimeLog parses into real progress.
           const ok =
             typeof M.ttsOpenExplicitVerbose === "function"
-              ? await M.ttsOpenExplicitVerbose("/models/voxcpm2.gguf", "voxcpm2-tts", 4, 1)
-              : await M.ttsOpenExplicit("/models/voxcpm2.gguf", "voxcpm2-tts", 4);
+              ? await M.ttsOpenExplicitVerbose("/models/voxcpm2.gguf", "voxcpm2-tts", nThreads, 2)
+              : await M.ttsOpenExplicit("/models/voxcpm2.gguf", "voxcpm2-tts", nThreads);
           if (!ok) throw new Error("ttsOpenExplicit failed — model may be corrupt");
           if (!webgpuBackendConfirmed) {
             M.ttsClose?.();
             throw new Error("CrispASR did not confirm the WebGPU backend; CPU fallback is disabled");
           }
 
+          // The GGUF loader has copied the weights into the wasm heap by now;
+          // the MEMFS staging file is a dead second copy of the model (~1.5 GB
+          // for Q4_K inside a 4 GiB wasm32 address space). Drop it before the
+          // first synthesis allocates KV cache and graph buffers.
+          try {
+            M.FS_unlink("/models/voxcpm2.gguf");
+          } catch {
+            // Non-fatal: worst case we keep the old memory profile.
+          }
+
           opened = true;
           activeModelId = msg.baselmPath;
-          post({ type: "status", label: "VoxCPM2 ready · GGUF WebGPU", backend: "webgpu" });
+          post({ type: "ready", label: "VoxCPM2 ready · GGUF WebGPU", backend: "webgpu" });
           break;
         }
 
@@ -209,13 +307,37 @@ function main() {
           M.sessionSetTargetLanguage?.(isKhmer ? "km" : "en");
 
           const t0 = Date.now();
+          synthesizing = true;
+          synthStartedAt = t0;
+          estMaxPatches = 0;
+
+          // Stall heartbeat. Real progress comes from the per-patch stderr
+          // lines parsed in reportRuntimeLog; this timer only fires during
+          // JSPI suspensions (GPU waits) and exists so long CPU-side stages
+          // before the first patch still show measured elapsed time.
+          const ticker = setInterval(() => {
+            if (estMaxPatches > 0) return; // per-patch reporting has taken over
+            const elapsed = Math.round((Date.now() - t0) / 1000);
+            post({
+              type: "status",
+              label: `Synthesizing… ${elapsed}s elapsed`,
+              progress: 0.1,
+              backend: "webgpu",
+            });
+          }, 1000);
 
           // This script is already a dedicated Worker. The WebGPU build uses
-          // Asyncify, so the Embind call becomes awaitable while Dawn waits for
+          // JSPI, so the Embind call becomes awaitable while Dawn waits for
           // GPU work. Avoid the CPU-oriented ttsSynthesizeAsync pthread
-          // trampoline, which cannot carry an Asyncify suspension across its
+          // trampoline, which cannot carry a JSPI suspension across its
           // detached C++ callback thread.
-          const pcm = await Promise.resolve(M.ttsSynthesize(msg.text) as Float32Array);
+          let pcm: Float32Array;
+          try {
+            pcm = await Promise.resolve(M.ttsSynthesize(msg.text) as Float32Array);
+          } finally {
+            clearInterval(ticker);
+            synthesizing = false;
+          }
 
           if (!pcm || !pcm.length) throw new Error("Synthesis returned empty buffer");
 
@@ -281,6 +403,12 @@ function main() {
       );
     }
   };
+
+  // Take over from the bootstrap buffer, then replay anything that arrived
+  // while the loader was still being fetched.
+  self.onmessage = handleMessage;
+  const buffered = pendingMessages.splice(0, pendingMessages.length);
+  for (const event of buffered) void handleMessage(event);
 
   /** Stage bytes into the Emscripten MEMFS path. */
   function stageFile(path: string, bytes: Uint8Array): void {

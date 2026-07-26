@@ -22,7 +22,46 @@ import {
   type RuntimeMemoryUsage,
 } from "@nd-os/voxcpm2-web-runtime";
 import type { RuntimeWorkerRequest, RuntimeWorkerResponse } from "../../../src/features/tts/workers/messages";
-import VoxCPM2Worker from "../../../src/features/tts/workers/runtime.worker?worker";
+import { crispasrAssetUrls } from "../../../src/features/tts/workers/crispasr-paths";
+import workerModuleUrl from "../../../src/features/tts/workers/runtime.worker?worker&url";
+
+/**
+ * Construct the runtime worker from a classic `blob:` bootstrap.
+ *
+ * Why not `?worker` directly: Emscripten's pthread pool spawns helper workers
+ * from the parent worker's own URL (`new Worker(_scriptName, {name:
+ * "em-pthread"})` — `mainScriptUrlOrBlob` is compiled out of the shipped
+ * loader). In dev, Vite serves `?worker` as an ES module, which a classic
+ * pthread helper cannot execute — the pool silently fails and ggml computes
+ * single-threaded (measured: one core pegged, GPU idle). With this bootstrap
+ * the worker's URL *is* a classic script: helper threads re-execute it under
+ * `name === "em-pthread"`, importScripts the loader, and its UMD tail
+ * self-boots the pthread. The primary path dynamic-imports the real worker
+ * module (legal in classic workers), with the CrispASR asset URLs baked in
+ * because a `blob:` context cannot resolve public assets relative to itself.
+ */
+function createRuntimeWorkerViaBlob(): Worker {
+  const assets = crispasrAssetUrls(globalThis.location.href);
+  const moduleUrl = new URL(workerModuleUrl, globalThis.location.href).href;
+  const src = [
+    `if (self.name === "em-pthread") {`,
+    `  importScripts(${JSON.stringify(assets.loader)});`,
+    `} else {`,
+    `  self.__CRISPASR_ASSETS = ${JSON.stringify(assets)};`,
+    // The browser only auto-queues messages until the INITIAL script finishes,
+    // and this wrapper finishes immediately — while the dynamic import is
+    // still in flight. Without a buffering handler here, the proxy's "init"
+    // (posted right after construction) is dispatched with no listener and
+    // silently lost; the module takes over this same array when it loads.
+    `  self.__CRISPASR_PENDING = [];`,
+    `  self.onmessage = function (e) { self.__CRISPASR_PENDING.push(e); };`,
+    `  import(${JSON.stringify(moduleUrl)}).catch(function (e) {`,
+    `    self.postMessage({ type: "error", message: "Worker bootstrap failed: " + (e && e.message ? e.message : e) });`,
+    `  });`,
+    `}`,
+  ].join("\n");
+  return new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+}
 
 export interface StudioRuntimeOptions {
   /** Override the list of installed model ids (mostly for tests). */
@@ -38,7 +77,14 @@ export interface StudioRuntimeOptions {
 export async function createStudioRuntime(
   options: StudioRuntimeOptions = {},
 ): Promise<VoxCPM2Runtime> {
-  const installed = new Set(options.installedModelIds ?? (await listInstalledModelIds()));
+  // An empty `installedModelIds` means "caller didn't know", not "nothing is
+  // installed" — `generate()` auto-initializes with `[]`. Using `??` here made
+  // that empty array win over OPFS discovery, so an installed GGUF was never
+  // found and every generation silently fell through to the interim DSP.
+  const explicitIds = options.installedModelIds;
+  const installed = new Set(
+    explicitIds && explicitIds.length > 0 ? explicitIds : await listInstalledModelIds(),
+  );
   // Any published VoxCPM2 GGUF variant is a complete model. Manifest order
   // provides the preference when more than one quantization is installed.
   const installedGGUF = VOXCPM2_MANIFEST.models.find(
@@ -55,18 +101,18 @@ export async function createStudioRuntime(
     return createVoxCPM2Runtime();
   }
 
-  // `?worker` makes Vite transpile TypeScript and emit a classic IIFE worker;
-  // the previous new-URL form was copied verbatim as an unusable `.ts` file.
-  const WorkerConstructor = options.WorkerClass ?? VoxCPM2Worker;
+  const createWorker = options.WorkerClass
+    ? () => new options.WorkerClass!()
+    : createRuntimeWorkerViaBlob;
 
-  return createWorkerProxyRuntime(resolved.filename, installedGGUF.bytes, WorkerConstructor);
+  return createWorkerProxyRuntime(resolved.filename, installedGGUF.bytes, createWorker);
 }
 
 /** Proxy implementing VoxCPM2Runtime that communicates with runtime.worker.ts */
 function createWorkerProxyRuntime(
   modelFilename: string,
   estimatedModelBytes: number,
-  WorkerClass: new () => Worker,
+  createWorker: () => Worker,
 ): VoxCPM2Runtime {
   let worker: Worker | null = null;
   let status: RuntimeStatus = {
@@ -75,6 +121,8 @@ function createWorkerProxyRuntime(
     label: "VoxCPM2 idle",
   };
   let activeBackend: RuntimeStatus["backend"] = "unavailable";
+  // Remembered so a post-cancel generate can transparently reload the model.
+  let lastInitOptions: Parameters<VoxCPM2Runtime["initialize"]>[0] | null = null;
   let activeInitPromise: {
     resolve: () => void;
     reject: (err: any) => void;
@@ -87,7 +135,7 @@ function createWorkerProxyRuntime(
 
   function initWorker() {
     if (worker) return;
-    worker = new WorkerClass();
+    worker = createWorker();
     const fail = (message: string) => {
       status = {
         code: "error",
@@ -115,10 +163,14 @@ function createWorkerProxyRuntime(
       const msg = event.data;
       switch (msg.type) {
         case "status":
-          const isReady = msg.label.toLowerCase().includes("ready");
+          // Status messages are informational only (the worker forwards every
+          // native stdout/stderr line as one). Readiness arrives as an
+          // explicit "ready" message — inferring it from a "ready" substring
+          // here used to trip on ggml's own "ggml buffer ready" load logs,
+          // resolving init early and swallowing the real error.
           activeBackend = msg.backend ?? activeBackend;
           status = {
-            code: isReady ? "ready" : msg.progress !== undefined ? "generating" : "loading",
+            code: msg.progress !== undefined ? "generating" : "loading",
             backend: activeBackend,
             label: msg.label,
             progress: msg.progress,
@@ -126,7 +178,16 @@ function createWorkerProxyRuntime(
           if (activeGeneratePromise?.callbacks?.onProgress && msg.progress !== undefined) {
             activeGeneratePromise.callbacks.onProgress(msg.progress, msg.label);
           }
-          if (activeInitPromise && isReady) {
+          break;
+
+        case "ready":
+          activeBackend = msg.backend ?? activeBackend;
+          status = {
+            code: "ready",
+            backend: activeBackend,
+            label: msg.label,
+          };
+          if (activeInitPromise) {
             const { resolve } = activeInitPromise;
             activeInitPromise = null;
             resolve();
@@ -166,8 +227,9 @@ function createWorkerProxyRuntime(
     };
   }
 
-  return {
+  const proxy: VoxCPM2Runtime = {
     async initialize(options) {
+      lastInitOptions = options;
       initWorker();
       status = {
         code: "loading",
@@ -176,11 +238,16 @@ function createWorkerProxyRuntime(
       };
       activeBackend = "unavailable";
       return new Promise<void>((resolve, reject) => {
+        // Cold load is dominated by staging 1.6 GB from OPFS and uploading
+        // dequantized weights to the GPU — measured ~2.5 minutes on an
+        // RTX 4070 desktop, so the previous 120 s ceiling could never pass.
+        // The worker's explicit "ready" message resolves well before this on
+        // warm loads; the timeout is only a last-resort hang guard.
         const timeout = globalThis.setTimeout(() => {
           if (!activeInitPromise) return;
           activeInitPromise = null;
-          reject(new Error("VoxCPM2 model loading timed out after 120 seconds"));
-        }, 120_000);
+          reject(new Error("VoxCPM2 model loading timed out after 10 minutes"));
+        }, 600_000);
         activeInitPromise = {
           resolve: () => {
             globalThis.clearTimeout(timeout);
@@ -202,10 +269,13 @@ function createWorkerProxyRuntime(
     },
 
     async generate(request) {
-      return this.generateStream(request, {});
+      return proxy.generateStream(request, {});
     },
 
     async generateStream(request, callbacks) {
+      // A prior cancel() tore the worker down. Transparently reload the
+      // model (the caller's provider believes it is still initialized).
+      if (!worker && lastInitOptions) await proxy.initialize(lastInitOptions);
       if (!worker) throw new Error("Worker not initialized");
       if (activeGeneratePromise) throw new Error("Another generation is active");
 
@@ -227,8 +297,31 @@ function createWorkerProxyRuntime(
     },
 
     async cancel() {
-      if (worker) {
-        worker.postMessage({ type: "cancel", jobId: "active" } as RuntimeWorkerRequest);
+      // The shipped binary has no native abort: the VoxCPM2 AR loop checks no
+      // cancellation flag of any kind, so a cooperative "cancel" message
+      // could only be observed after synthesis already finished. Terminating
+      // the worker is the ONLY way to stop the computation and free the
+      // CPU/GPU. The model is gone with the worker; the next generateStream
+      // reloads it via lastInitOptions.
+      if (!worker) return;
+      const w = worker;
+      worker = null;
+      w.terminate();
+      status = {
+        code: "idle",
+        backend: "unavailable",
+        label: "Cancelled — model reloads on next generate",
+      };
+      const abort = () => new DOMException("Generation cancelled", "AbortError");
+      if (activeGeneratePromise) {
+        const { reject } = activeGeneratePromise;
+        activeGeneratePromise = null;
+        reject(abort());
+      }
+      if (activeInitPromise) {
+        const { reject } = activeInitPromise;
+        activeInitPromise = null;
+        reject(abort());
       }
     },
 
@@ -255,6 +348,7 @@ function createWorkerProxyRuntime(
       };
     },
   };
+  return proxy;
 }
 
 /**
