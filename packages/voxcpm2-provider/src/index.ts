@@ -14,7 +14,11 @@ import type { VoxCPM2Runtime } from "@nd-os/voxcpm2-web-runtime";
 import type { TTSResult } from "@nd-os/shared-types";
 import { mapRequestToRuntime, VOXCPM2_DEFAULTS } from "./mapper";
 import { validateVoxCPM2Request } from "./validation";
-import { createStudioRuntime } from "./runtime-factory";
+import { createStudioRuntime, type StudioRuntimeOptions } from "./runtime-factory";
+
+export interface VoxCPM2ProviderOptions {
+  runtimeFactory?: (options?: StudioRuntimeOptions) => Promise<VoxCPM2Runtime>;
+}
 
 export const voxcpm2Metadata: TTSProviderMetadata = {
   id: "voxcpm2",
@@ -48,13 +52,17 @@ export const voxcpm2Metadata: TTSProviderMetadata = {
   },
 };
 
-export function createVoxCPM2Provider(): TTSProvider {
+export function createVoxCPM2Provider(
+  options: VoxCPM2ProviderOptions = {},
+): TTSProvider {
   let runtime: VoxCPM2Runtime | null = null;
   let activeJobId: string | null = null;
   let initialized = false;
+  let initializationError: unknown;
+  const runtimeFactory = options.runtimeFactory ?? createStudioRuntime;
 
   async function getRuntime(): Promise<VoxCPM2Runtime> {
-    if (!runtime) runtime = await createStudioRuntime();
+    if (!runtime) runtime = await runtimeFactory();
     return runtime;
   }
 
@@ -95,21 +103,29 @@ export function createVoxCPM2Provider(): TTSProvider {
     },
 
     async initialize(config: TTSProviderConfig) {
-      if (runtime) await runtime.unload();
-      runtime = await createStudioRuntime({ installedModelIds: config.modelIds });
-      const rt = runtime;
-      await rt.initialize({
-        baselmPath: config.modelIds[0],
-        acousticPath: config.modelIds[1],
-        preferWebGpu: config.preferWebGpu,
-        allowInterimEngine: true,
-      });
-      initialized = true;
+      try {
+        if (runtime) await runtime.unload();
+        runtime = await runtimeFactory({ installedModelIds: config.modelIds });
+        const rt = runtime;
+        await rt.initialize({
+          baselmPath: config.modelIds[0],
+          acousticPath: config.modelIds[1],
+          preferWebGpu: config.preferWebGpu,
+          allowInterimEngine: config.modelIds.length === 0,
+        });
+        initialized = true;
+        initializationError = undefined;
+      } catch (error) {
+        initialized = false;
+        initializationError = error;
+        throw error;
+      }
     },
 
     async unload() {
       if (runtime) await runtime.unload();
       initialized = false;
+      initializationError = undefined;
       activeJobId = null;
     },
 
@@ -140,6 +156,7 @@ export function createVoxCPM2Provider(): TTSProvider {
       callbacks?: TTSGenerationCallbacks,
     ): Promise<TTSResult> {
       if (!initialized) {
+        if (initializationError !== undefined) throw initializationError;
         await this.initialize({
           modelIds: [],
           preferWebGpu: true,
