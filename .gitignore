@@ -1,5 +1,11 @@
 node_modules/
 dist/
+
+# Staged from node_modules by scripts/sync-ffmpeg-core.mjs
+public/ffmpeg/
+
+# Per-machine Claude Code permission overrides
+.claude/settings.local.json
 .svelte-kit/
 .vite/
 .DS_Store

@@ -15,6 +15,11 @@ export const appCatalog: Record<AppId, AppMeta> = {
     icon: "🎙",
     description: "Local-first text-to-speech with VoxCPM2",
   },
+  "video-toolkit": {
+    title: "Video Toolkit",
+    icon: "🎬",
+    description: "Convert, trim, caption and brand video — all on-device",
+  },
   poker: {
     title: "Poker",
     icon: "♠",
@@ -37,6 +42,8 @@ export function defaultWindowSize(id: AppId): { width: number; height: number } 
       return { width: 720, height: 520 };
     case "tts-studio":
       return { width: 1100, height: 720 };
+    case "video-toolkit":
+      return { width: 1180, height: 760 };
     case "poker":
       return { width: 1000, height: 680 };
     default:

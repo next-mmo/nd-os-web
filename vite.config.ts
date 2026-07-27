@@ -18,7 +18,10 @@ export default defineConfig({
   optimizeDeps: {
     // ONNX Runtime ships WebAssembly assets that Vite must keep as external
     // files instead of pre-bundling during dependency optimization.
-    exclude: ["onnxruntime-web"],
+    // ffmpeg.wasm is excluded for the same reason, plus its worker is spawned
+    // via `new URL("./worker.js", import.meta.url)`, which pre-bundling breaks.
+    // The core itself is served from public/ — see scripts/sync-ffmpeg-core.mjs.
+    exclude: ["onnxruntime-web", "@ffmpeg/ffmpeg", "@ffmpeg/util"],
   },
   resolve: {
     alias: {
@@ -28,6 +31,7 @@ export default defineConfig({
       "@nd-os/tts-core": path.resolve(root, "packages/tts-core/src/index.ts"),
       "@nd-os/audio-engine": path.resolve(root, "packages/audio-engine/src/index.ts"),
       "@nd-os/model-storage": path.resolve(root, "packages/model-storage/src/index.ts"),
+      "@nd-os/video-engine": path.resolve(root, "packages/video-engine/src/index.ts"),
       "@nd-os/voxcpm2-web-runtime": path.resolve(
         root,
         "packages/voxcpm2-web-runtime/src/index.ts",

@@ -16,6 +16,7 @@ export default defineConfig({
       "@nd-os/tts-core": path.resolve(root, "packages/tts-core/src/index.ts"),
       "@nd-os/audio-engine": path.resolve(root, "packages/audio-engine/src/index.ts"),
       "@nd-os/model-storage": path.resolve(root, "packages/model-storage/src/index.ts"),
+      "@nd-os/video-engine": path.resolve(root, "packages/video-engine/src/index.ts"),
       "@nd-os/voxcpm2-web-runtime": path.resolve(
         root,
         "packages/voxcpm2-web-runtime/src/index.ts",
